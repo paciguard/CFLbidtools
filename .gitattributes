@@ -1,0 +1,10 @@
+* text=auto
+
+# Preserve the hydraulic source records and their recorded import hashes.
+vendor/PumpSelectionTools/Resources/Hydcalc/*.txt -text
+*.dwg binary
+*.xls binary
+*.xlsx binary
+*.ttf binary
+*.png binary
+*.jpg binary

@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <DefaultItemExcludes>$(DefaultItemExcludes);vendor/**</DefaultItemExcludes>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="vendor/SDOCtools/ZTools.Offline/ZTools.Offline.csproj" />
+    <ProjectReference Include="vendor/PumpSelectionTools/PumpCore.csproj" />
+    <Compile Remove="PumpResources.cs" />
+    <Content Include="vendor/SDOCtools/ZTools.Mobile.Shared/web/mobile.js" Link="SdocWeb/mobile.js" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="vendor/SDOCtools/ZTools.Standalone/wwwroot/vendor/*" Link="SdocWeb/vendor/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="vendor/SDOCtools/ZTools.Standalone/wwwroot/cfl-logo.jpg" Link="SdocWeb/cfl-logo.jpg" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

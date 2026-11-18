@@ -1,0 +1,161 @@
+[Catalogs]
+CatalogCount=16
+IDs=1;2;3;4;5;6;7;8;9;10;11;12;13;14;15;16
+ 
+[Catalog 1]
+CatalogName=Single Stage Design
+PumpCount=7
+Pump0=ZA
+Pump1=ZE
+Pump2=ZF
+Pump3=CAP8
+Pump4=SMN
+Pump5=HZZ
+Pump6=OHH
+ 
+[Catalog 2]
+CatalogName=Ring Section Design
+PumpCount=4
+Pump0=MB
+Pump1=MC
+Pump2=MD
+Pump3=MD_sf
+ 
+[Catalog 3]
+CatalogName=Barrel Design
+PumpCount=1
+Pump0=GSG
+ 
+[Catalog 4]
+CatalogName=Vertical Design
+PumpCount=4
+Pump0=VCR8
+Pump1=BKC
+Pump2=TTMC-CEP
+Pump3=TTMC-HPI
+ 
+[Catalog 5]
+CatalogName=Horizontal Design
+PumpCount=17
+Pump0=MB
+Pump1=MC
+Pump2=CAP8
+Pump3=MSD
+Pump4=MSD-D
+Pump5=MSD-DD
+Pump6=MSE
+Pump7=SMN
+Pump8=CD
+Pump9=MD
+Pump10=HZZ
+Pump11=OHH
+Pump12=CD8
+Pump13=MD_sf
+Pump14=GSG
+Pump15=BBT
+Pump16=BBTD
+ 
+[Catalog 6]
+CatalogName=HPI
+PumpCount=13
+Pump0=CAP8
+Pump1=MSD
+Pump2=MSD-D
+Pump3=MSD-DD
+Pump4=MSE
+Pump5=VCR8
+Pump6=MD
+Pump7=HZZ
+Pump8=OHH
+Pump9=TTMC-HPI
+Pump10=GSG
+Pump11=BBT
+Pump12=BBTD
+ 
+[Catalog 7]
+CatalogName=Oil & Gas
+PumpCount=13
+Pump0=ZE
+Pump1=CAP8
+Pump2=MSD
+Pump3=MSD-D
+Pump4=MSD-DD
+Pump5=MSE
+Pump6=VCR8
+Pump7=HZZ
+Pump8=OHH
+Pump9=TTMC-HPI
+Pump10=GSG
+Pump11=BBT
+Pump12=BBTD
+ 
+[Catalog 8]
+CatalogName=PG
+PumpCount=7
+Pump0=MB
+Pump1=MC
+Pump2=BKC
+Pump3=MD
+Pump4=MD_sf
+Pump5=TTMC-CEP
+Pump6=GSG
+ 
+[Catalog 9]
+CatalogName=OHH Separate
+PumpCount=1
+Pump0=OHH
+ 
+[Catalog 10]
+CatalogName=ZRangeZaZEZF
+PumpCount=3
+Pump0=ZA
+Pump1=ZE
+Pump2=ZF
+ 
+[Catalog 11]
+CatalogName=Water
+PumpCount=3
+Pump0=ZA
+Pump1=SMN
+Pump2=BKC
+ 
+[Catalog 12]
+CatalogName=TSS SPDE
+PumpCount=12
+Pump0=MB
+Pump1=MC
+Pump2=ZA
+Pump3=ZE
+Pump4=ZF
+Pump5=MD
+Pump6=HZZ
+Pump7=MD_sf
+Pump8=TTMC-CEP
+Pump9=TTMC-HPI
+Pump10=GSG
+Pump11=GSGA
+ 
+[Catalog 13]
+CatalogName=TSS SBR
+PumpCount=1
+Pump0=SMN
+ 
+[Catalog 14]
+CatalogName=TSS SPUS
+PumpCount=11
+Pump0=CAP8
+Pump1=MSD
+Pump2=MSD-D
+Pump3=MSD-DD
+Pump4=MSE
+Pump5=CD
+Pump6=VCR8
+Pump7=OHH
+Pump8=CD8
+Pump9=BBT
+Pump10=BBTD
+ 
+[Catalog 15]
+CatalogName=ANSI Design
+PumpCount=1
+Pump0=CZ

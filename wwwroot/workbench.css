@@ -1,0 +1,72 @@
+*{box-sizing:border-box}
+:root{font:14px/1.45 system-ui,-apple-system,"Microsoft YaHei",sans-serif;color:#122529;background:#edf2f1;--line:#d7e2e0;--muted:#526765;--accent:#076872;--pale:#e7f4f2;--white:#fff}
+body{margin:0}
+[hidden]{display:none!important}
+h1,h2,p{margin:0}
+h1{font-size:22px}h2{font-size:16px}
+a{color:inherit;text-decoration:none}
+button,input,select{font:inherit}
+button,select{cursor:pointer}
+button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:40px;padding:7px 13px;border:1px solid var(--line);border-radius:6px;background:#fff;color:#164146}
+button:hover:not(:disabled){background:#edf8f7;border-color:#82afac}
+button:disabled{opacity:.45;cursor:default}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:650}
+button.primary:hover:not(:disabled){background:#04525a}
+:focus-visible{outline:2px solid #0d838a;outline-offset:3px}
+svg.lucide{width:17px;height:17px;flex:none}
+.masthead{padding:0 max(18px,env(safe-area-inset-left));display:flex;align-items:center;gap:28px;background:#fff;border-bottom:1px solid var(--line);min-height:66px}
+.brand{display:inline-flex;align-items:center;gap:10px;flex:none}
+.brand img{object-fit:contain;border-radius:6px}
+.brand strong,.brand small{display:block}
+.brand strong{font-size:16px}
+.brand small{font-size:11px;color:var(--muted)}
+nav{display:flex;gap:4px;min-width:0}
+nav a{padding:11px 13px;border-radius:6px;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;color:var(--muted);font-weight:600}
+nav a:hover,nav a[aria-current=page]{color:#06565e;background:var(--pale)}
+.masthead #install{margin-left:auto}
+.surface{width:min(100%,1640px);margin:auto;padding:16px 22px max(22px,env(safe-area-inset-bottom))}
+.duty,.workspace,.surface#catalog{background:#fff;border:1px solid var(--line)}
+.duty{padding:14px 16px}
+.section-heading,.panel-heading{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.section-heading{justify-content:flex-start;margin-bottom:13px}
+#open-submission{margin-left:auto;white-space:nowrap}
+.section-heading span,.panel-heading>span{color:var(--muted);font-size:12px}
+#duty-form{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px 12px;align-items:end}
+label{min-width:0;display:block;font-size:12px;font-weight:650;color:#334c4b}
+label span{font-weight:400;color:var(--muted);white-space:nowrap}
+input,select{display:block;width:100%;min-width:0;margin-top:5px;padding:8px 9px;border:1px solid #bfcfcd;border-radius:5px;min-height:40px;background:#fff;color:#192e30;font-size:15px}
+.workspace{display:grid;grid-template-columns:minmax(385px,1fr) minmax(0,1.35fr);margin-top:14px;min-height:470px}
+.result-panel,.detail-panel{min-width:0}
+.detail-panel{border-left:1px solid var(--line)}
+.panel-heading{padding:12px 14px;min-height:52px;border-bottom:1px solid var(--line)}
+.detail-heading{align-items:flex-start}
+#selection-subtitle{overflow-wrap:anywhere;color:var(--muted);font-size:12px;margin-top:3px}
+.tools{display:flex;gap:5px}
+.icon-button{padding:6px;width:38px;min-height:36px}
+.table-scroll{max-height:610px;overflow:auto;overscroll-behavior:contain}
+table{border-collapse:separate;border-spacing:0;width:100%;font-size:13px;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+th,td{padding:8px 10px;border-bottom:1px solid #e3ebea}
+th:first-child,td:first-child{text-align:left}
+th{position:sticky;top:0;z-index:1;background:#f2f7f6;color:#3d5654;font-size:12px}
+#results tr[aria-selected=true]{background:#dff1ed}
+#results tr:hover{background:#eff7f5}
+#results tr:has(button){cursor:pointer}
+#results button{min-height:30px;border:0;background:transparent;padding:2px;color:#06565e;font-size:13px;font-weight:700}
+.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0;margin:0;border-bottom:1px solid var(--line)}
+.metrics div{padding:9px 12px;border-right:1px solid #e3ebea;border-bottom:1px solid #e3ebea}
+.metrics dt{font-size:11px;color:var(--muted)}
+.metrics dd{margin:4px 0 0;font-weight:650;overflow-wrap:anywhere}
+#plots figure{position:relative;margin:0;padding:8px 0;background:#fff;border-bottom:1px solid var(--line)}
+#plots figure:first-child::before{content:"";position:absolute;inset:13% 16% 16%;background:url("/sdoc-assets/cfl-logo.jpg") center/contain no-repeat;opacity:.065;pointer-events:none}
+#plots img{width:100%;height:auto;display:block;position:relative}
+.empty,.notice{padding:15px;color:var(--muted)}
+.notice{background:#fff3e6;color:#713b0c;margin-top:10px;border-left:3px solid #ae5e24}
+#catalog{margin-top:16px;width:calc(100% - 44px);padding:0}
+.catalog-controls,.pager{display:flex;flex-wrap:wrap;align-items:end;gap:12px;padding:12px 14px}
+.pager{align-items:center;justify-content:flex-end}
+.documents{padding:0}
+iframe{display:block;width:100%;min-height:calc(100dvh - 66px);border:0;background:#edf2f1}
+@media(max-width:1080px){#duty-form{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@media(max-width:850px){.workspace{grid-template-columns:1fr}.detail-panel{border-left:0;border-top:1px solid var(--line)}.result-panel .table-scroll{max-height:255px}}
+@media(max-width:590px){.masthead{padding:8px 10px;flex-wrap:wrap;gap:6px;min-height:0}.masthead nav{order:3;width:100%}.masthead nav a{font-size:13px;padding:8px 9px}.brand img{width:32px;height:32px}.brand small{display:none}.surface{padding:10px}.duty{padding:12px}#duty-form{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}input,select{font-size:16px}.workspace{margin-top:10px}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}#catalog{width:calc(100% - 20px);margin-top:10px}.documents{padding:0}iframe{min-height:calc(100dvh - 94px)}}
+@media print{@page{margin:10mm}body,.surface,.workspace,.detail-panel{background:white}.masthead{display:flex;border:0;padding:0 0 8px}.masthead nav,.duty,.result-panel,.tools,#install{display:none!important}.surface{padding:0;width:100%}.workspace{display:block;border:0;margin:0}.detail-panel{border:0}.metrics{grid-template-columns:repeat(4,minmax(0,1fr))}#plots figure{padding:0;break-inside:avoid}#plots figure:first-child img{max-height:106mm}#plots figure:not(:first-child) img{max-height:43mm}#plots figure::before{print-color-adjust:exact}}

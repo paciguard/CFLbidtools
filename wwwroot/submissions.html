@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>提交资料 · 凯乐工程工作台</title>
+  <link rel="stylesheet" href="/submissions.css">
+  <script src="/lucide.min.js" defer></script>
+  <script src="/submission-transport.js" defer></script>
+  <script type="module" src="/sdoc-assets/mobile.js"></script>
+</head>
+<body>
+<main>
+  <div class="heading"><h1>提交资料</h1><div class="actions"><button id="new"><i data-lucide="file-plus"></i> 新建项目</button><button id="open"><i data-lucide="folder-open"></i> 打开项目</button><button id="import"><i data-lucide="upload"></i> 导入 Excel</button></div></div>
+  <input id="workbook-upload" type="file" accept=".xlsx,.xls" hidden>
+  <section id="duty-transfer" hidden>
+    <div class="section-title">
+      <div><h2>来自泵选型</h2><p id="duty-details"></p><p id="transfer-policy"></p><p id="transfer-status" role="status"></p></div>
+      <button id="apply-duty" type="button" data-host-control disabled>填入选型参数</button>
+    </div>
+  </section>
+  <section>
+    <div class="section-title"><h2>项目信息</h2><strong id="project">请选择或新建项目</strong></div>
+    <div class="actions"><button data-form="project" data-job disabled>项目设置</button><button id="excel" data-job disabled><i data-lucide="download"></i> 导出 Excel</button></div>
+  </section>
+  <div class="columns">
+    <div>
+      <section id="equipment">
+        <div class="section-title"><h2>设备与参数</h2><div class="actions"><button id="add" data-job disabled>添加设备</button><button id="remove" data-job disabled>删除设备</button></div></div>
+        <label>当前设备<select id="device" data-job disabled></select></label>
+        <div class="actions"><button data-form="equipment" data-job disabled>设备参数</button><button data-form="motor" data-job disabled>电机与底座</button><button data-form="pid" data-job disabled>管仪参数</button><button data-form="materials" data-job disabled>剖面材料</button><button data-form="utility" data-job disabled>公用工程参数</button></div>
+        <div class="actions"><button id="calculate" class="primary" data-job disabled>计算项目数据</button><button id="utility" data-job disabled>计算公用工程</button></div>
+        <p id="calculation"></p>
+      </section>
+      <section>
+        <h2>图纸输出</h2><div id="rows"></div>
+        <div class="checks"><label><input type="checkbox" value="GA" checked>总装外形图</label><label><input type="checkbox" value="PID" checked>管路仪表图</label><label><input type="checkbox" value="SEC" checked>剖面及明细</label></div>
+        <div class="actions"><button id="print" data-job disabled>打印设置</button><button id="generate" class="primary" data-job disabled>生成 DWG＋PDF</button></div>
+        <div id="files"></div>
+      </section>
+      <details><summary>操作记录</summary><pre id="log"></pre></details>
+    </div>
+    <section class="preview">
+      <div class="section-title"><h2>图纸预览</h2><button id="fit" title="适合窗口" aria-label="适合窗口"><i data-lucide="maximize"></i></button></div>
+      <div id="viewport"><p id="empty">生成图纸后可预览。</p><small id="canvasNote" hidden></small></div>
+    </section>
+  </div>
+</main>
+<dialog id="dialog"><form id="form"><div class="dialog-title"><h2 id="dialogTitle"></h2><button type="button" id="cancel">关闭</button></div><div id="fields"></div><p id="formError" role="alert"></p><footer><button type="submit" class="primary">保存参数</button></footer></form></dialog>
+<dialog id="creationComplete" class="completion-dialog" aria-labelledby="creationCompleteTitle" aria-describedby="creationSummary"><div class="dialog-title"><h2 id="creationCompleteTitle">图纸生成完成</h2></div><p id="creationSummary" class="creation-summary"></p><form method="dialog"><footer><button class="primary" autofocus>确定</button></footer></form></dialog>
+<p id="message" role="alert" hidden></p>
+<div id="busy" role="status" hidden><span></span><strong id="busyText">正在处理，请稍候…</strong><button id="cancelCalculation" hidden>取消计算</button></div>
+</body>
+</html>

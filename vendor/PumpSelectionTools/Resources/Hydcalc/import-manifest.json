@@ -1,0 +1,31 @@
+{
+  "source": "F:\\BIZ\\CFL\\Selection Tools\\hydcalc-MOD2026101803\\data",
+  "importDate": "2026-10-19",
+  "files": [
+    {
+      "file": "liquids.txt",
+      "sha256": "20558477D1A71B62E575367E080072E40D39BCE83A3C03D1797F92AFD1D55F2F",
+      "bytes": 17019
+    },
+    {
+      "file": "PumpHydraulics.txt",
+      "sha256": "D4FA5C7377CB6F3929C7A83EB28B1039A43F3EAAEDE0632CB8A11A69EB8D0049",
+      "bytes": 28602
+    },
+    {
+      "file": "PumpProperties.txt",
+      "sha256": "75E8DFC72381D06C48E5ADC9E65A208C7922B15F035D4A2DC8A0260FFC2C94DF",
+      "bytes": 57258
+    },
+    {
+      "file": "Catalogs.txt",
+      "sha256": "DA07A741630C4286E04E18C671E8AED324F6C9BB156E9D35D8849A1A7CA5C4C7",
+      "bytes": 2033
+    },
+    {
+      "file": "Curves.txt",
+      "sha256": "0E8AF7CB9DE2FA1B66A1D66E0602D0EC592636F9A5D6B168F78BD00B84F80096",
+      "bytes": 1326938
+    }
+  ]
+}
