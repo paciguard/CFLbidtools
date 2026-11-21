@@ -13,27 +13,31 @@ namespace PumpSelectionTools
     {
         public static PlotModel[] Create(HydcalcSelection selection, double density, double? efficiencyOverride = null,
             double? dutyFlow = null, double? dutyHead = null, int? dutyRpm = null,
-            double preferredMin = 0.7, double preferredMax = 1.2)
+            double preferredMin = 0.7, double preferredMax = 1.2, string series = null)
         {
+            double viscosity = selection.ViscosityCst;
             if (dutyFlow.HasValue && dutyHead.HasValue && dutyFlow > 0 && dutyHead > 0 &&
                 (Math.Abs(dutyFlow.Value - selection.Flow) > 1e-8 || Math.Abs(dutyHead.Value - selection.Head) > 1e-6 ||
                  (dutyRpm.HasValue && dutyRpm.Value != selection.Rpm)))
             {
+                if (selection.PdfReference != null)
+                    throw new InvalidOperationException("The pump duty changed. Run selection again.");
                 int rpm = dutyRpm ?? selection.Rpm;
                 double dutyMinimum = selection.Curve.MinDiameterMm.Value / selection.Curve.MaxDiameterMm.Value;
                 if (selection.SuctionCurve != null) dutyMinimum = Math.Max(dutyMinimum,
                     selection.SuctionCurve.MinDiameterMm.Value / selection.SuctionCurve.MaxDiameterMm.Value);
                 double ratio, actualHead, efficiency, npshr;
                 if (!HydcalcSizing.TryDiameter(selection.Curve, selection.SuctionCurve, selection.Stages, rpm,
-                    dutyFlow.Value, dutyHead.Value, dutyMinimum, out ratio) ||
+                    dutyFlow.Value, dutyHead.Value, dutyMinimum, out ratio, viscosity) ||
                     !HydcalcSizing.TryEvaluate(selection.Curve, selection.SuctionCurve, selection.Stages, rpm,
-                    ratio, dutyFlow.Value, selection.Options, out actualHead, out efficiency, out npshr))
+                    ratio, dutyFlow.Value, selection.Options, out actualHead, out efficiency, out npshr, viscosity))
                     throw new InvalidOperationException("The selected pump cannot produce the current duty. Run selection again.");
                 selection = new HydcalcSelection { Property = selection.Property, Curve = selection.Curve,
                     SuctionCurve = selection.SuctionCurve, Stages = selection.Stages, Rpm = rpm, DiameterRatio = ratio,
-                    Efficiency = efficiency, Npshr = npshr, Flow = dutyFlow.Value, Head = actualHead, Options = selection.Options };
+                    Efficiency = efficiency, Npshr = npshr, Flow = dutyFlow.Value, Head = actualHead, Options = selection.Options,
+                    ViscosityCst = viscosity };
             }
-            var head = Model(selection.Property.Field(0) + " " + selection.Property.Field(1), "Head (m)");
+            var head = Model((series ?? selection.Property.Field(0)) + " " + selection.Property.Field(1), "Head (m)");
             head.Legends.Add(new Legend { LegendPosition = LegendPosition.TopRight, LegendPlacement = LegendPlacement.Inside,
                 LegendFontSize = 8, LegendSymbolLength = 18, LegendSymbolMargin = 4,
                 LegendPadding = 5, LegendItemSpacing = 2, LegendBackground = OxyColors.White, LegendBorder = OxyColors.Gray });
@@ -45,10 +49,21 @@ namespace PumpSelectionTools
                 (selection.SuctionCurve == null ? " / " : "\n") + selection.HydraulicLabel;
             var npsh = Model("NPSHr", "NPSHr (m)");
             var power = Model("Shaft power", "Power (kW)");
+            if (selection.PdfReference is PdfTrimCurves reference)
+            {
+                AddPdfTraces(head, npsh, power, selection, reference, density, preferredMin, preferredMax);
+                return new[] { head, npsh, power };
+            }
+            if (viscosity > 1) npsh.Subtitle = "Estimated for viscosity; verify with manufacturer";
             double qFactor, hFactor, eq, ef;
             HydcalcMath.TrimFactors(selection.Curve, selection.DiameterRatio, out qFactor, out hFactor, out eq, out ef);
-            double maxFlow = selection.Curve.Points.Last().FlowM3h * selection.Rpm / selection.Curve.Rpm.Value;
-            var flows = Enumerable.Range(0, 241).Select(i => maxFlow * i / 240).Concat(new[] { selection.Flow, maxFlow * qFactor })
+            double ratedScale = qFactor * HydcalcSizing.FlowCorrection(selection.Curve, selection.Rpm, selection.DiameterRatio, viscosity);
+            double fullFlow = selection.Curve.Points.Last().FlowM3h * selection.Rpm / selection.Curve.Rpm.Value;
+            var npshCurve = selection.SuctionCurve ?? selection.Curve;
+            double npshLimit = npshCurve.Points.Last().FlowM3h * selection.Rpm / npshCurve.Rpm.Value *
+                (selection.Options.WithNpshCutting ? selection.DiameterRatio : 1);
+            double maxFlow = viscosity > 1 ? Math.Max(fullFlow, npshLimit) : fullFlow;
+            var flows = Enumerable.Range(0, 241).Select(i => maxFlow * i / 240).Concat(new[] { selection.Flow, fullFlow * ratedScale })
                 .GroupBy(q => Math.Round(q, 9)).Select(g => g.Any(q => q == selection.Flow) ? selection.Flow : g.First()).OrderBy(q => q).ToArray();
             var hRated = new LineSeries { Title = "Rated D=" + (selection.DiameterRatio * selection.Curve.MaxDiameterMm.Value).ToString("0.#") + " mm", Color = OxyColors.Blue, StrokeThickness = 3 };
             var hMax = new LineSeries { Title = "Maximum D=" + selection.Curve.MaxDiameterMm.Value.ToString("0.#") + " mm", Color = OxyColors.Black, LineStyle = LineStyle.Solid, StrokeThickness = 2 };
@@ -60,16 +75,19 @@ namespace PumpSelectionTools
             double minimum = selection.Curve.MinDiameterMm.Value / selection.Curve.MaxDiameterMm.Value;
             if (selection.SuctionCurve != null) minimum = Math.Max(minimum,
                 selection.SuctionCurve.MinDiameterMm.Value / selection.SuctionCurve.MaxDiameterMm.Value);
+            bool canTrim = minimum < 1;
             hMin.Title = "Minimum D=" + (minimum * selection.Curve.MaxDiameterMm.Value).ToString("0.#") + " mm";
             double bestEfficiency = double.NegativeInfinity, bestFlow = double.NaN, bestHead = double.NaN;
             foreach (double flow in flows)
             {
                 double h, e, n;
                 HydcalcSizing.TryEvaluate(selection.Curve, selection.SuctionCurve, selection.Stages, selection.Rpm,
-                    selection.DiameterRatio, flow, selection.Options, out h, out e, out n);
+                    selection.DiameterRatio, flow, selection.Options, out h, out e, out n, viscosity);
+                if (viscosity > 1)
+                    HydcalcSizing.TryNpshr(npshCurve, selection.Rpm, selection.DiameterRatio, flow, selection.Options, viscosity, out n);
                 double ratedHead;
                 bool hasRatedHead = HydcalcSizing.TryHead(selection.Curve, selection.SuctionCurve, selection.Stages, selection.Rpm,
-                    selection.DiameterRatio, flow, out ratedHead);
+                    selection.DiameterRatio, flow, out ratedHead, viscosity);
                 if (hasRatedHead)
                     hRated.Points.Add(new DataPoint(flow, ratedHead));
                 else hRated.Points.Add(DataPoint.Undefined);
@@ -89,18 +107,21 @@ namespace PumpSelectionTools
                     else efficiencyCurve.Points.Add(DataPoint.Undefined);
                     if (flow > 0) pRated.Points.Add(DataPoint.Undefined);
                 }
-                hMax.Points.Add(HydcalcSizing.TryHead(selection.Curve, selection.SuctionCurve, selection.Stages, selection.Rpm,
-                    1, flow, out h) ? new DataPoint(flow, h) : DataPoint.Undefined);
-                hMin.Points.Add(HydcalcSizing.TryHead(selection.Curve, selection.SuctionCurve, selection.Stages, selection.Rpm,
-                    minimum, flow, out h) ? new DataPoint(flow, h) : DataPoint.Undefined);
+                if (canTrim)
+                {
+                    hMax.Points.Add(HydcalcSizing.TryHead(selection.Curve, selection.SuctionCurve, selection.Stages, selection.Rpm,
+                        1, flow, out h, viscosity) ? new DataPoint(flow, h) : DataPoint.Undefined);
+                    hMin.Points.Add(HydcalcSizing.TryHead(selection.Curve, selection.SuctionCurve, selection.Stages, selection.Rpm,
+                        minimum, flow, out h, viscosity) ? new DataPoint(flow, h) : DataPoint.Undefined);
+                }
             }
             var lowPower = new List<DataPoint>();
             foreach (var source in selection.Curve.Points.Where(p => p.FlowM3h > 0))
             {
-                double q = source.FlowM3h * selection.Rpm / selection.Curve.Rpm.Value * qFactor;
+                double q = source.FlowM3h * selection.Rpm / selection.Curve.Rpm.Value * ratedScale;
                 double h, e, n;
                 HydcalcSizing.TryEvaluate(selection.Curve, selection.SuctionCurve, selection.Stages, selection.Rpm,
-                    selection.DiameterRatio, q, selection.Options, out h, out e, out n);
+                    selection.DiameterRatio, q, selection.Options, out h, out e, out n, viscosity);
                 if (h <= 0 || double.IsNaN(h) || e <= 0 || e > 100 || double.IsNaN(e)) continue;
                 if (efficiencyOverride.HasValue) e = Math.Min(100, e * efficiencyOverride.Value / selection.Efficiency);
                 lowPower.Add(new DataPoint(q, density * 9.81 * (q / 3600) * h / (e / 100) / 1000));
@@ -114,14 +135,14 @@ namespace PumpSelectionTools
                     pRated.Points.RemoveAt(0);
                 pRated.Points.Insert(0, new DataPoint(0, shutoff));
             }
-            head.Series.Add(hMax); head.Series.Add(hMin); head.Series.Add(hRated); head.Series.Add(efficiencyCurve);
+            if (canTrim) { head.Series.Add(hMax); head.Series.Add(hMin); }
+            head.Series.Add(hRated); head.Series.Add(efficiencyCurve);
             npsh.Series.Add(nRated); power.Series.Add(pRated);
             AddConvertedAxis(npsh, 3.280839895, "NPSHr (ft)");
             AddConvertedAxis(power, 1.34102209, "Power (hp)");
             AddPreferredRegion(head, selection, minimum, preferredMin, preferredMax);
             double mcsfBase = double.NaN;
             bool isZ = string.Equals(selection.Property.Field(0).Trim(), "Z", StringComparison.OrdinalIgnoreCase);
-            var npshCurve = selection.SuctionCurve ?? selection.Curve;
             if (isZ)
             {
                 PumpTableCache.Load();
@@ -132,15 +153,18 @@ namespace PumpSelectionTools
             else
             {
                 var firstNpsh = npshCurve.Points.FirstOrDefault(p => p.Npshr > 0);
-                if (firstNpsh != null) mcsfBase = firstNpsh.FlowM3h * selection.Rpm / npshCurve.Rpm.Value;
+                if (firstNpsh?.FlowM3h > 0) mcsfBase = firstNpsh.FlowM3h * selection.Rpm / npshCurve.Rpm.Value;
             }
             if (!double.IsNaN(mcsfBase))
                 AddMcsfCurve(head, minimum, mcsfBase,
                     ratio => isZ || selection.Options.WithNpshCutting ? ratio : 1.0,
                     (ratio, q) => { double h; return HydcalcSizing.TryHead(selection.Curve, selection.SuctionCurve,
-                        selection.Stages, selection.Rpm, ratio, q, out h) ? (double?)h : null; });
-            LabelDiameter(head, hMax, "Max", selection.Curve.MaxDiameterMm.Value);
-            LabelDiameter(head, hMin, "Min", minimum * selection.Curve.MaxDiameterMm.Value);
+                        selection.Stages, selection.Rpm, ratio, q, out h, viscosity) ? (double?)h : null; });
+            if (canTrim)
+            {
+                LabelDiameter(head, hMax, "Max", selection.Curve.MaxDiameterMm.Value);
+                LabelDiameter(head, hMin, "Min", minimum * selection.Curve.MaxDiameterMm.Value);
+            }
             LabelDiameter(head, hRated, "Rated", selection.DiameterRatio * selection.Curve.MaxDiameterMm.Value);
             if (!double.IsNaN(bestFlow)) AddBepMarker(head, bestFlow, bestHead);
             AddDutyMarker(head, selection.Flow, selection.Head);
@@ -149,6 +173,66 @@ namespace PumpSelectionTools
             AddDutyMarker(power, selection.Flow, density * 9.81 * selection.Flow / 3600 * selection.Head / (eta / 100) / 1000);
             return new[] { head, npsh, power };
         }
+
+        private static void AddPdfTraces(PlotModel head, PlotModel npsh, PlotModel power, HydcalcSelection selection,
+            PdfTrimCurves reference, double density, double preferredMin, double preferredMax)
+        {
+            var diameter = selection.DiameterRatio * reference.MaxDiameter;
+            var rated = reference.Samples(selection.Curve, selection.Rpm, diameter, selection.Flow);
+            var maximum = reference.Samples(selection.Curve, selection.Rpm, reference.MaxDiameter, selection.Flow);
+            var minimum = reference.Samples(selection.Curve, selection.Rpm, reference.MinDiameter, selection.Flow);
+            var bep = Best(rated);
+            LineSeries Line(PlotModel plot, string title, OxyColor color, IEnumerable<PdfTrimSample> samples,
+                Func<PdfTrimSample, double?> value, double thickness = 2, string axis = null)
+            {
+                var line = new LineSeries { Title = title, Color = color, StrokeThickness = thickness, YAxisKey = axis };
+                line.Points.AddRange(samples.Select(p => value(p) is double y ? new DataPoint(p.Flow, y) : DataPoint.Undefined));
+                plot.Series.Add(line);
+                return line;
+            }
+            var hMax = Line(head, $"Maximum D={reference.MaxDiameter:0.#} mm", OxyColors.Black, maximum, p => p.Head);
+            var hMin = Line(head, $"Minimum D={reference.MinDiameter:0.#} mm", OxyColors.Gray, minimum, p => p.Head);
+            var hRated = Line(head, $"Rated D={diameter:0.#} mm", OxyColors.Blue, rated, p => p.Head, 3);
+            Line(head, "Efficiency (%)", OxyColors.Green, rated, p => p.Efficiency is > 0 and <= 100 ? p.Efficiency : null,
+                axis: "Efficiency");
+            Line(npsh, "NPSHr", OxyColors.Blue, rated, p => p.Npshr);
+            Line(power, "Shaft power", OxyColors.Blue, rated, p => p.WaterPower * density / 1000);
+            head.Subtitle += $" / digitized at {reference.Rpm} rpm" +
+                (reference.IsPublishedDiameter(diameter) ? "" : " / interpolated trim");
+            npsh.Subtitle = "Estimated; verify with manufacturer";
+            AddConvertedAxis(npsh, 3.280839895, "NPSHr (ft)");
+            AddConvertedAxis(power, 1.34102209, "Power (hp)");
+
+            var maxBep = Best(maximum).Flow;
+            var minBep = Best(minimum).Flow;
+            if (maxBep > 0 && minBep > 0 && preferredMin >= 0 && preferredMax > preferredMin)
+            {
+                var region = new AreaSeries { Title = "Preferred region (est.)", Fill = OxyColor.FromArgb(220, 0, 255, 255),
+                    Color = OxyColors.Cyan, StrokeThickness = 1 };
+                for (int i = 0; i <= 80; i++)
+                {
+                    double fraction = preferredMin + (preferredMax - preferredMin) * i / 80.0;
+                    double qMax = maxBep * fraction, qMin = minBep * fraction;
+                    var max = reference.Sample(selection.Curve, selection.Rpm, reference.MaxDiameter, qMax);
+                    var min = reference.Sample(selection.Curve, selection.Rpm, reference.MinDiameter, qMin);
+                    if (max.Head is not double high || min.Head is not double low) continue;
+                    region.Points.Add(new DataPoint(qMax, high));
+                    region.Points2.Add(new DataPoint(qMin, low));
+                }
+                if (region.Points.Count >= 2) head.Series.Insert(0, region);
+            }
+            LabelDiameter(head, hMax, "Max", reference.MaxDiameter);
+            LabelDiameter(head, hMin, "Min", reference.MinDiameter);
+            LabelDiameter(head, hRated, "Rated", diameter);
+            if (bep.Head is double h) AddBepMarker(head, bep.Flow, h);
+            AddDutyMarker(head, selection.Flow, selection.Head);
+            AddDutyMarker(npsh, selection.Flow, selection.Npshr);
+            AddDutyMarker(power, selection.Flow, selection.PowerKw);
+        }
+
+        private static PdfTrimSample Best(IEnumerable<PdfTrimSample> samples) =>
+            samples.Where(p => p.Efficiency is > 0 and <= 100).DefaultIfEmpty().MaxBy(p => p.Efficiency);
+
         public static double EstimateShutoffPower(IList<DataPoint> points)
         {
             var first = points[0];
@@ -175,7 +259,10 @@ namespace PumpSelectionTools
             if (preferredMin < 0 || preferredMax <= preferredMin) return;
             var bep = HydcalcSizing.Bep(selection.Curve);
             double maxBepFlow = bep.FlowM3h * selection.Rpm / selection.Curve.Rpm.Value;
-            if (maxBepFlow <= 0) return;
+            var viscosity = selection.ViscosityCst;
+            var maxCorrection = HydcalcSizing.FlowCorrection(selection.Curve, selection.Rpm, 1, viscosity);
+            var minCorrection = HydcalcSizing.FlowCorrection(selection.Curve, selection.Rpm, minRatio, viscosity);
+            if (maxBepFlow <= 0 || !double.IsFinite(maxCorrection) || !double.IsFinite(minCorrection)) return;
             double minFlowFactor, hFactor, effQ, effFactor;
             HydcalcMath.TrimFactors(selection.Curve, minRatio, out minFlowFactor, out hFactor, out effQ, out effFactor);
             var region = new AreaSeries { Title = "Preferred region", Fill = OxyColor.FromArgb(220, 0, 255, 255),
@@ -183,11 +270,12 @@ namespace PumpSelectionTools
             bool started = false;
             for (int i = 0; i <= 80; i++)
             {
-                double qMax = maxBepFlow * (preferredMin + (preferredMax - preferredMin) * i / 80.0);
-                double qMin = qMax * minFlowFactor;
+                double qWater = maxBepFlow * (preferredMin + (preferredMax - preferredMin) * i / 80.0);
+                double qMax = qWater * maxCorrection;
+                double qMin = qWater * minFlowFactor * minCorrection;
                 double hMax, hMin = 0;
-                bool valid = HydcalcSizing.TryHead(selection.Curve, selection.SuctionCurve, selection.Stages, selection.Rpm, 1, qMax, out hMax) &&
-                    HydcalcSizing.TryHead(selection.Curve, selection.SuctionCurve, selection.Stages, selection.Rpm, minRatio, qMin, out hMin);
+                bool valid = HydcalcSizing.TryHead(selection.Curve, selection.SuctionCurve, selection.Stages, selection.Rpm, 1, qMax, out hMax, viscosity) &&
+                    HydcalcSizing.TryHead(selection.Curve, selection.SuctionCurve, selection.Stages, selection.Rpm, minRatio, qMin, out hMin, viscosity);
                 if (!valid) { if (started) break; continue; }
                 started = true;
                 region.Points.Add(new DataPoint(qMax, hMax));
@@ -241,18 +329,7 @@ namespace PumpSelectionTools
         public static void AddDutyMarker(PlotModel model, double x, double y)
         {
             if (double.IsNaN(x) || double.IsInfinity(x) || double.IsNaN(y) || double.IsInfinity(y)) return;
-            var points = model.Series.OfType<LineSeries>().Where(s => string.IsNullOrEmpty(s.YAxisKey))
-                .SelectMany(s => s.Points).Where(p => !double.IsNaN(p.X) && !double.IsInfinity(p.X) &&
-                    !double.IsNaN(p.Y) && !double.IsInfinity(p.Y)).ToList();
-            if (points.Count == 0) return;
-            double dx = Math.Max(points.Max(p => p.X) - points.Min(p => p.X), x) * 0.025;
-            double dy = Math.Max(points.Max(p => p.Y) - points.Min(p => p.Y), y) * 0.04;
-            var marker = new PolygonAnnotation { Fill = OxyColors.Blue, Stroke = OxyColors.Blue,
-                StrokeThickness = 1, Tag = "RatedPointTriangle" };
-            marker.Points.Add(new DataPoint(x, y));
-            marker.Points.Add(new DataPoint(x, y - dy));
-            marker.Points.Add(new DataPoint(x - dx, y));
-            model.Annotations.Add(marker);
+            model.Annotations.Add(new DutyPointTriangle(new DataPoint(x, y)) { Tag = "RatedPointTriangle" });
         }
         public static void AddBepMarker(PlotModel model, double x, double y)
         {
@@ -261,6 +338,29 @@ namespace PumpSelectionTools
                 MarkerFill = OxyColors.Red, MarkerSize = 5 };
             marker.Points.Add(new ScatterPoint(x, y));
             model.Series.Add(marker);
+        }
+    }
+
+    internal sealed class DutyPointTriangle : Annotation
+    {
+        private readonly DataPoint point;
+        public DutyPointTriangle(DataPoint point) => this.point = point;
+
+        public override void Render(IRenderContext context)
+        {
+            if (XAxis == null || YAxis == null) return;
+            var anchor = Transform(point);
+            var area = GetClippingRect();
+            const double size = 14;
+            const double stroke = 1.5;
+            const double inset = stroke / 2;
+            if (!area.Contains(anchor) || area.Width < size + stroke || area.Height < size + stroke) return;
+            // Slide the outline within the axes rather than mirroring it near an edge.
+            var right = Math.Clamp(anchor.X, area.Left + size + inset, area.Right - inset);
+            var top = Math.Clamp(anchor.Y, area.Top + inset, area.Bottom - size - inset);
+            context.DrawPolygon(new[] { new ScreenPoint(right, top), new ScreenPoint(right, top + size),
+                    new ScreenPoint(right - size, top) },
+                OxyColors.Undefined, OxyColors.Blue, stroke, EdgeRenderingMode.PreferGeometricAccuracy, null, LineJoin.Round);
         }
     }
 

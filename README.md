@@ -23,14 +23,16 @@ preview has no user sign-in and should stay on loopback.
 
 ## Pump data handoff
 
-The workbench calculates the result again on the server. Z and CZ selections
-can transfer to an existing equipment row when the hydraulic size matches its
-ZTools model and the model, edition, baseplate and voltage resolve against the
-embedded database. ZTools product prefixes ZA, ZE and ZF are supported for Z;
-CZ requires the matching CZ model. Other pump families retain full pump
-selection and are shown for reference in ZTools until their data is available.
+New ZTools projects start without sample equipment. For Z and CZ selections,
+**按选型新建项目** creates a blank workbook and fills its first equipment row.
+Choose the catalog model when a hydraulic size matches several ZTools models.
+ZTools product prefixes ZA, ZE and ZF are supported for Z; CZ requires the
+matching CZ model. The pump selection can also update an existing matching
+equipment row. Existing projects are preserved when creating a new one.
+Other pump families remain available for reference in ZTools.
 
-Only these `input` worksheet fields are written:
+On creation, the model goes in `input!N21`. The hydraulic fields written on
+creation or update are:
 
 | Column | Value |
 | --- | --- |
@@ -40,22 +42,148 @@ Only these `input` worksheet fields are written:
 | Q | Rated efficiency, stored as a fraction and displayed as a percentage |
 | R | Rated pump speed in rpm |
 
-Use the ZTools dialogs to choose the equipment model, materials, motor,
-baseplate, accessories, drawing types and print options. Recalculate after a
-transfer. The input workbook still contains only the `input` sheet. The
+Optional project and equipment details from **提交资料项目参数** transfer when
+creating a project. The printed pump model and company name do not change the
+catalog model or hydraulic data used for calculations.
+
+**电机规格** shows the selected pump RPM and recommended motor kW as read-only.
+The motor series, explosion marking, IP rating, manufacturer, nameplate
+frequency and VFD or line operation are specified separately. The frame and
+voltage still select the actual GA geometry; confirm them from the vendor.
+When the selection has no supported motor recommendation, enter a confirmed
+motor rating before calculation. Select the supported
+API 610 edition (7, 8 or 10), bearing type, flushing plan and cooling plan under
+**API 版本、轴承与方案**. These settings feed the existing ZTools calculations.
+Available drawings depend on the data for the chosen pump and configuration:
+for example, ZE uses edition-specific data and SEC templates, while CZ uses
+its own bearing-based SEC templates. Recalculate before generating GA, SEC
+and PID. The pump model and hydraulic fields can be edited on the page.
+Use **导出 Excel** when an Excel copy is needed. The workbook still contains
+only the `input` sheet. The
 source workbooks and DWG templates retain their original formats.
 
 ## PDFs and phone installation
 
-The pump report uses the browser print dialog. ZTools exports GA, PID and SEC
+Enter **项目基本信息** above the pump duty controls; the same details pass to ZTools.
+**导出 PDF** saves the selected curve with its three plots and two-column selection
+data sheet on A4. The Print button remains available. ZTools exports GA, PID and SEC
 PDFs with a centered grid of small CFL logos tilted 45 degrees behind the vector
-drawing on each page. The logo uses a 13% opacity PNG embedded in the server assembly. The CAD export
+drawing on each page. The curve and drawing PDF watermarks use about 8% opacity.
+The CAD export
 continues to generate editable DWG files from the original templates.
+
+In Chrome or Edge on localhost or HTTPS, choose **选择项目目录** on the selection
+page or **选择工作目录** in ZTools. For a single equipment item, Curve, GA, SEC and
+PID PDFs go into the same folder. Use **项目设备项数** for a multi-item project so
+the four categories go into separate subfolders from the first export. Added
+ZTools equipment rows also trigger category folders for subsequent exports.
+Existing files are not moved or overwritten. Other browsers can download
+PDFs individually using the same filenames.
 
 The manifest, icons and service worker prepare the workbench for home screen
 installation. A phone needs a reachable HTTPS deployment to use the server.
 The cached page does not perform calculations or generate files offline.
-Android/iPhone installation and publishing are a later deployment step.
+Use **添加设备项** to queue each pump duty and **批量选型** to find a result per item.
+Open a queued item to review or change its selection. **批量导出曲线** saves the
+selected curves; **批量提交资料** starts a single ZTools project with all mapped
+items. Use **批量图纸参数** to edit motor, bearing, plan, API edition and detail
+inputs, then calculate and generate all checked items. ZTools drawing packages
+require a matching ZA/ZE/ZF/CZ model for every item. Other families can export
+curve PDFs.
+
+## Liquid viscosity
+
+Enter dynamic viscosity (cP) at the pumping temperature. Leaving it blank
+keeps the original water curves. The engine converts the entry to cSt using
+the entered density and applies ANSI/HI 9.6.7-2021 corrections per hydraulic
+stage for Newtonian liquids. The correction affects candidate selection,
+curve plots, efficiency, shaft power and the existing motor sizing rule.
+The PDF records the viscosity and correction factors. NPSHr is estimated
+using the conservative side-inlet coefficient and needs manufacturer
+verification. The engine does not extrapolate past 3,000 cSt or the method's
+specific-speed or B-factor limits.
+
+## Curve numbers
+
+The curve catalog and selected-pump view show the new and original curve
+numbers from `CFL_Curve_Library_MOD.xlsx`. Search the catalog by either
+number. The curve PDF and print view show only the new number. The number
+mapping is bundled with the app and does not change the hydraulic data.
+
+The same workbook's `new 系列` column sets the series shown in selection
+and curve PDF exports. BKC, CAP8, HZZ, and MSE are marked `NONE`: they
+are excluded from selection and remain in the library under their
+original series names. The source family still identifies the hydraulic
+and ZTools records (for example, X uses Z and XC uses CZ).
+
+Choose X to specify XA, XE, XF, XZX or XGP. These subtypes share the X
+hydraulics; the subtype changes the name on selection results, plots
+and curve PDFs. Leaving it unset keeps the generic X name. ZTools
+drawing-model selection works as before.
+
+AHLSTAR A 23-40 uses the digitized K50551 head and shaft-power traces from
+page 21 of `ahlstar_performance_curves.pdf` (2950 rpm) for normal selection
+at 2980 rpm. The app scales for speed and interpolates between adjacent
+published diameters (210, 245, 280, 315 and 330 mm) where both traces cover
+the duty flow. Efficiency is calculated from head and shaft power. At
+30 m³/h and 150 m, the estimated trim is 308.79 mm.
+
+The original 40 points remain in the catalog. Their 330 mm NPSHr values
+supplement the digitized chart where that trace is unclear. NPSHr between
+published traces is interpolated and marked as an estimate. Selection
+does not extend the curves beyond their digitized flow ranges or apply an
+unverified viscosity correction. The comparison and JSON export still
+show all five traces; the selection result and curve PDF flag estimates
+for confirmation with the manufacturer.
+
+## Deployment packages
+
+On Windows, **Build > Rebuild Solution** in Visual Studio generates both the
+x64 Windows setup and the Android test APK in `artifacts/packages`. A regular
+Build or Run does not generate installers. The packages use Release binaries
+regardless of the active solution configuration. Packaging errors are shown
+in the build output and fail the rebuild. For a rebuild without installers,
+pass `-p:CflPackageOnRebuild=false` to MSBuild.
+
+To package separately, run `deploy/Build-Packages.ps1` in PowerShell with
+`-Platform Windows` or `-Platform Android`. The Windows setup uses Inno Setup,
+installs per user, and opens the workbench on loopback. Existing local project data is separate.
+Use an appropriately licensed Inno Setup compiler for commercial distribution.
+
+Use `-Platform Android` with the Android SDK and JDK to build the test-signed
+APK. Android opens the bundled workbench by default: pump selection, the
+curve catalog, and supported ZTools calculations and drawing exports run on
+the device without a PC or network connection. The Android file picker saves
+PDF, DWG, Excel and batch ZIP exports. Workbooks created in the Android app
+are stored on the phone; they aren't synced to the PC. **Connect to PC** in
+the Android menu optionally opens a separate online session in the browser.
+The iPhone client still uses the online workbench.
+
+### Connect a phone to the Windows installation
+
+1. Start the installed **CFL Engineering Workbench** on the PC.
+2. Install Tailscale on the PC and phone and connect both to the same approved
+   private network. MagicDNS and HTTPS must be enabled there. Limit access to
+   this PC's port 9443 to approved users in the network's access rules.
+3. Open **CFL Workbench - Phone Connection** from the Windows Start menu.
+   Enable private phone access, then send the displayed HTTPS link to the phone.
+   Use that link in the Android app or directly in the phone's browser.
+4. On iPhone, open the link in Safari and select **Add to Home Screen** and
+   **Open as Web App**. No IPA is needed for this option.
+
+Do not use `localhost` or a PC-only HTTP address on the phone. Keep the
+Windows workbench running while using the phone. The setup uses Tailscale
+Serve, not Funnel, and does not open the app to the public. The same shortcut
+can turn off phone access; turn it off before uninstalling. Workbooks already
+open in a PC browser aren't automatically synced to a separate phone session.
+For a separately hosted deployment, supply your own authenticated HTTPS link.
+
+On a Mac with PowerShell, Xcode and the .NET iOS workload, set the environment
+variables `CFL_APPLE_SIGNING_KEY` and `CFL_APPLE_PROVISION` before rebuilding
+the solution to generate the signed IPA in `artifacts/packages/ios`. For
+manual packaging use `-Platform iOS` with `-AppleSigningKey` and
+`-AppleProvision`. Windows does not build the IPA. Store distribution requires
+the appropriate release signing credentials.
 
 ## Source and verification
 
@@ -68,3 +196,9 @@ uses the desktop hydraulic and selection source with a portable workbook reader.
 phone-sized layouts against the loopback preview. It requires the Playwright
 Node package and Microsoft Edge. Set `CFL_DATA_DIR` to an isolated test folder
 before running it.
+
+Run `dotnet run --project deploy/OfflineCheck -- artifacts/offline-check-data`
+to exercise the on-device calculation and export routes without starting a
+server. The `offline-browser-smoke.mjs` test uses the same engine through a
+simulated Android bridge with browser networking disabled. Set
+`CFL_OFFLINE_TEST_DLL` to the built `OfflineCheck.dll` before running it.

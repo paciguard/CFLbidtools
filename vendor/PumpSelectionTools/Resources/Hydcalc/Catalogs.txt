@@ -4,7 +4,7 @@ IDs=1;2;3;4;5;6;7;8;9;10;11;12;13;14;15;16
  
 [Catalog 1]
 CatalogName=Single Stage Design
-PumpCount=7
+PumpCount=8
 Pump0=ZA
 Pump1=ZE
 Pump2=ZF
@@ -12,6 +12,7 @@ Pump3=CAP8
 Pump4=SMN
 Pump5=HZZ
 Pump6=OHH
+Pump7=A
  
 [Catalog 2]
 CatalogName=Ring Section Design

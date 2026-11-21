@@ -52,7 +52,18 @@ public sealed partial class OfflineProject
             string text=requested.IsCancellationRequested?"已取消计算，项目 Excel 保持原样。":"计算长时间未完成，已停止并返回工作台，项目 Excel 保持原样。";
             Report(text);throw new InvalidOperationException(text);
         }
-        catch(Exception error){Report("计算未完成："+error.Message);throw;}
+        catch (SubmissionInputException error)
+        {
+            Report(error.Message);
+            foreach (var issue in error.Issues)
+                Report(issue.Equipment + " " + issue.Field + " (" + issue.Address + ")：" + issue.Message);
+            throw;
+        }
+        catch (Exception error)
+        {
+            Report(error is InvalidOperationException ? "计算未完成：" + error.Message : "计算在上一步骤中断。");
+            throw;
+        }
         finally
         {
             Volatile.Write(ref calculationCancellation,null);

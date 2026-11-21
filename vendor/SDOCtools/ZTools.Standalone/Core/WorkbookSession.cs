@@ -114,7 +114,7 @@ namespace ZTools.Engine
             }
             if (count == 0) throw new InvalidOperationException("请在 input!N21:N50 中至少填写一台泵的数据。");
             string standard = Cell("input", "I53");
-            if (!new[] { "ASME", "HG20615", "HG20592", "SH3406", "GB9113.1-2000" }.Contains(standard))
+            if (!FlangeStandard.Choices.Contains(FlangeStandard.Normalize(standard)))
                 throw new InvalidOperationException("请在 input!I53 中选择受支持的法兰标准。");
             return count;
         }

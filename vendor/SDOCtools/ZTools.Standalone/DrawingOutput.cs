@@ -4,6 +4,9 @@ using ACadSharp.IO;
 using CSMath;
 using PdfSharp.Drawing;
 using PdfSharp.Pdf;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ZTools.Engine;
@@ -20,6 +23,26 @@ public sealed record PlotScene(List<PlotItem> Items,List<string> Unsupported,She
 
 public static class DrawingOutput
 {
+    public static void EnsurePdfFonts() =>
+        PdfSharp.Fonts.GlobalFontSettings.FontResolver ??= new CflFontResolver();
+
+    private static readonly Lazy<byte[]> WatermarkPng = new(CreateWatermark);
+
+    public static XImage PdfWatermark() =>
+        XImage.FromStream(new MemoryStream(WatermarkPng.Value, writable: false));
+
+    private static byte[] CreateWatermark()
+    {
+        using var source = typeof(DrawingOutput).Assembly.GetManifestResourceStream("ZTools.Branding.CflDrawingWatermark.png")
+            ?? throw new InvalidOperationException("缺少 PDF 水印资源。");
+        using var logo = SixLabors.ImageSharp.Image.Load<Rgba32>(source);
+        // Retain the source logo's transparency and reduce its 13% opacity to about 8%.
+        logo.Mutate(canvas => canvas.Opacity(8f / 13f));
+        using var output = new MemoryStream();
+        logo.SaveAsPng(output);
+        return output.ToArray();
+    }
+
     public static CadDocument ReadTemplate(string kind,List<string> notices)
     {
         if(!new[]{"GA","PID","SEC"}.Contains(kind))throw new InvalidOperationException("未知图纸类型。");
@@ -143,7 +166,7 @@ public static class DrawingOutput
         if(string.IsNullOrWhiteSpace(value)||height<=0||width<=0)return value;
         // Use the same embedded font metrics as PDF, so the WebGL scene and the
         // exported drawing share paragraph breaks within the CAD text rectangle.
-        PdfSharp.Fonts.GlobalFontSettings.FontResolver ??= new CflFontResolver();
+        EnsurePdfFonts();
         using var document=new PdfDocument();var page=document.AddPage();using var measure=XGraphics.FromPdfPage(page);
         var font=new XFont("Microsoft YaHei",height,XFontStyleEx.Regular);var result=new List<string>();
         foreach(string paragraph in value.Replace("\r","").Split('\n'))
@@ -159,15 +182,20 @@ public static class DrawingOutput
         }
         return string.Join("\n",result);
     }
+    internal static double MeasureTextWidth(string value, double height)
+    {
+        EnsurePdfFonts();
+        using var document = new PdfDocument();
+        using var graphics = XGraphics.FromPdfPage(document.AddPage());
+        return graphics.MeasureString(value, new XFont("Microsoft YaHei", height, XFontStyleEx.Regular)).Width;
+    }
     public static void Pdf(string path,PlotScene scene)
     {
-        PdfSharp.Fonts.GlobalFontSettings.FontResolver ??= new CflFontResolver();
+        EnsurePdfFonts();
         scene.Frame.Validate();
         if(scene.Unsupported.Count>0)throw new InvalidOperationException("PDF 尚未支持这些模板实体："+string.Join("、",scene.Unsupported)+"。请先转换或检查模板。");
         using var pdf=new PdfDocument();pdf.Info.Title="凯乐提交图纸";
-        using var watermarkStream = typeof(DrawingOutput).Assembly.GetManifestResourceStream("ZTools.Branding.CflDrawingWatermark.png")
-            ?? throw new InvalidOperationException("缺少 PDF 水印资源。");
-        using var watermark = XImage.FromStream(watermarkStream);
+        using var watermark = PdfWatermark();
         for(int copy=0;copy<scene.Frame.Copies;copy++)
         {
             var page=pdf.AddPage();page.Width=PdfSharp.Drawing.XUnit.FromMillimeter(420);page.Height=PdfSharp.Drawing.XUnit.FromMillimeter(297);
@@ -253,8 +281,13 @@ public static class DrawingOutput
             foreach(string kind in kinds.Distinct())foreach(int k in selected.Distinct())
             {
                 string name=book.Cell("Sheet1",(kind=="GA"?"P":kind=="PID"?"Q":"R")+(40+k));
+                if(name.Length==0)throw new InvalidOperationException("请先计算项目数据，再生成图纸。");
+#if CFL_PORTABLE
+                name=engine.DrawingFileName(kind,k);
+#endif
                 name=new string(name.Where(c=>!Path.GetInvalidFileNameChars().Contains(c)&&!char.IsControl(c)).ToArray()).Trim().TrimEnd('.');
                 if(name.Length==0)throw new InvalidOperationException("请先计算项目数据，再生成图纸。");
+                engine.UpdateLegacyFlangeLabels(k);
                 var document=ReadTemplate(kind,notices);
                 book.Book.Worksheets["Sheet1"].Range["C19"].Value2=40+k;
                 if(kind=="SEC")engine.PrepareSection(k);
@@ -263,7 +296,8 @@ public static class DrawingOutput
                 if(kind=="PID")foreach(var e in document.Entities.ToArray())
                 {var box=e.GetBoundingBox();if(box.Min.X<-.01||box.Min.Y<-.01||box.Max.X>420.01||box.Max.Y>297.01)document.Entities.Remove(e);}
                 string dir=Path.Combine(folder,kind);Directory.CreateDirectory(dir);string stem=Path.Combine(dir,name);
-                if(File.Exists(stem+".dwg"))throw new InvalidOperationException("输出文件名重复："+name);
+                for(int suffix=2;File.Exists(stem+".dwg");suffix++)
+                    stem=Path.Combine(dir,name+" ("+suffix+")");
                 document.Header.Version=ACadVersion.AC1032;DwgWriter.Write(stem+".dwg",document);
                 // Reopen the actual saved DWG to verify serialization before announcing success.
                 var check=DwgReader.Read(stem+".dwg");if(check.Entities.Count()!=document.Entities.Count())throw new InvalidOperationException("DWG 保存后实体数量校验失败。");

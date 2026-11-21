@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <DefineConstants>$(DefineConstants);CFL_OFFLINE_TEST</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../vendor/PumpSelectionTools/PumpCore.csproj" />
+    <ProjectReference Include="../../vendor/SDOCtools/ZTools.Offline/ZTools.Offline.csproj" />
+    <Compile Include="../../PumpWorkbench.cs;../../PumpCurvePdf.cs;../../PumpReportMetrics.cs;../../SubmissionSession.cs;../../WorkbenchDownload.cs;../Mobile/OfflineRoutes.cs" />
+    <EmbeddedResource Include="../../vendor/SDOCtools/ZTools.Standalone/wwwroot/cfl-logo.jpg" LogicalName="CflWorkbench.Brand.jpg" />
+  </ItemGroup>
+</Project>

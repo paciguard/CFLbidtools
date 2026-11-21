@@ -211,9 +211,36 @@ internal static class ProjectWorkbook
             }
         }
     }
-    internal static void Create(string path)
+    internal static void Create(string path, Action<HSSFWorkbook> initialize)
     {
-        using var template=TemplateResources.Open("Input.xlsx");using var input=new XSSFWorkbook(template);using var model=Materialize(input);WriteInput(model,path);
+        using var template = TemplateResources.Open("Input.xlsx");
+        using var input = new XSSFWorkbook(template);
+        using var model = Materialize(input);
+        ClearInputs(model.GetSheet("input"), 21, 50, 4, 31);
+        ClearInputs(model.GetSheet("PID"), 10, 39, 6, 9);
+        ClearInputs(model.GetSheet("Sec-List"), 10, 39, 6, 15);
+        ClearInputs(model.GetSheet("Utility"), 13, 42, 5, 11);
+        foreach (var address in new[] { "F10", "F11", "F12", "F13", "F14", "F15", "K10", "L12", "L13", "L14" })
+        {
+            var cell = new NPOI.SS.Util.CellReference(address);
+            ClearInputs(model.GetSheet("input"), cell.Row + 1, cell.Row + 1, cell.Col + 1, cell.Col + 1);
+        }
+        var project = model.GetSheet("Sheet1");
+        ClearInputs(project, 4, 5, 3, 3);
+        ClearInputs(project, 10, 10, 3, 3);
+        project.GetRow(9).GetCell(1).SetCellValue("CFL订单号");
+        initialize?.Invoke(model);
+        WriteInput(model, path);
+    }
+
+    internal static void ClearInputs(ISheet sheet, int firstRow, int lastRow, int firstColumn, int lastColumn)
+    {
+        for (int row = firstRow; row <= lastRow; row++)
+            for (int column = firstColumn; column <= lastColumn; column++)
+            {
+                var cell = sheet.GetRow(row - 1)?.GetCell(column - 1);
+                if (cell != null && cell.CellType != CellType.Formula) cell.SetCellType(CellType.Blank);
+            }
     }
     internal static void CopyInputLayout(ISheet source,ISheet target)
     {

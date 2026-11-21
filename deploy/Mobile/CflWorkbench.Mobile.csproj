@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-android</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ApplicationTitle>CFL Engineering Workbench</ApplicationTitle>
+    <ApplicationId>com.cfl.bidtools</ApplicationId>
+    <ApplicationDisplayVersion>1.2.11</ApplicationDisplayVersion>
+    <ApplicationVersion>14</ApplicationVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">23.0</SupportedOSPlatformVersion>
+    <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">15.0</SupportedOSPlatformVersion>
+    <AndroidManifest Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">AndroidManifest.xml</AndroidManifest>
+    <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
+  </PropertyGroup>
+  <ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">
+    <ProjectReference Include="../../vendor/PumpSelectionTools/PumpCore.csproj" />
+    <ProjectReference Include="../../vendor/SDOCtools/ZTools.Offline/ZTools.Offline.csproj" />
+    <Compile Include="../../PumpWorkbench.cs;../../PumpCurvePdf.cs;../../PumpReportMetrics.cs;../../SubmissionSession.cs;../../WorkbenchDownload.cs"
+             Link="Workbench/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="../../vendor/SDOCtools/ZTools.Standalone/wwwroot/cfl-logo.jpg" LogicalName="CflWorkbench.Brand.jpg" />
+    <AndroidAsset Include="../../wwwroot/**/*" LogicalName="site/%(RecursiveDir)%(Filename)%(Extension)" />
+    <AndroidAsset Include="../../vendor/SDOCtools/ZTools.Mobile.Shared/web/mobile.js" LogicalName="site/sdoc-assets/mobile.js" />
+    <AndroidAsset Include="../../vendor/SDOCtools/ZTools.Standalone/wwwroot/vendor/*" LogicalName="site/sdoc-assets/vendor/%(Filename)%(Extension)" />
+    <AndroidAsset Include="../../vendor/SDOCtools/ZTools.Standalone/wwwroot/cfl-logo.jpg" LogicalName="site/sdoc-assets/cfl-logo.jpg" />
+  </ItemGroup>
+  <ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">
+    <ImageAsset Remove="Assets.xcassets/**/*" />
+    <ImageAsset Include="Assets.xcassets/**/*" Exclude="Assets.xcassets/**/.DS_Store" />
+  </ItemGroup>
+</Project>

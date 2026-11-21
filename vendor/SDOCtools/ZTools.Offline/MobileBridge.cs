@@ -16,6 +16,8 @@ public sealed class MobileBridge
             "state"=>Project.State(),"new"=>Project.Create(),"projects"=>Project.Projects(),"open"=>Project.Open(Text("id")),
             "add"=>Project.AddEquipment(),"remove"=>Project.RemoveEquipment(Number("row")),
             "parameters"=>Project.Parameters(Text("group"),Number("row")),
+            "batch-parameters"=>Project.BatchParameters(),
+            "save-batch"=>Project.SaveBatchParameters(data.Deserialize<ParameterChanges[]>(DrawingOutput.JsonOptions)),
             "save"=>Project.SaveParameters(Text("group"),Number("row"),data.GetProperty("changes").Deserialize<InputChange[]>(DrawingOutput.JsonOptions)),
             "calculate"=>Project.Calculate(),"utility"=>Project.Calculate(true),
             "print"=>Project.SaveOptions(data.Deserialize<SheetOptions>(DrawingOutput.JsonOptions)),
@@ -25,7 +27,9 @@ public sealed class MobileBridge
         };
     }
     public static string Reply(int id,object data)=>JsonSerializer.Serialize(new{id,data},DrawingOutput.JsonOptions);
-    public static string Failure(int id,Exception error)=>JsonSerializer.Serialize(new{id,error="操作失败："+error.Message},DrawingOutput.JsonOptions);
+    public static string Failure(int id,Exception error)=>JsonSerializer.Serialize(
+        new { id, error = "操作失败：" + error.Message, issues = (error as SubmissionInputException)?.Issues },
+        DrawingOutput.JsonOptions);
     public static IEnumerable<string> Scripts(int id,string reply)
     {
         // GA scenes exceed 2 MB. Keep each native WebView message comfortably

@@ -331,7 +331,8 @@ namespace PumpSelectionTools
             return cached;
         }
 
-        public static List<HydcalcSelection> Search(double flow, double head, double? npsha, int hz, int? poles, int? fixedRpm = null)
+        public static List<HydcalcSelection> Search(double flow, double head, double? npsha, int hz, int? poles,
+            int? fixedRpm = null, double viscosityCst = 1)
         {
             var results = new List<HydcalcSelection>();
             if (flow <= 0 || head <= 0 || double.IsNaN(flow) || double.IsNaN(head) ||
@@ -360,15 +361,17 @@ namespace PumpSelectionTools
                     double ratio, actualHead, efficiency, npshr;
                     var options = new HydcalcSizingOptions();
                     if (!HydcalcSizing.TryDiameter(curve, null, 1, rpm, flow, head,
-                        curve.MinDiameterMm.Value / curve.MaxDiameterMm.Value, out ratio) ||
-                        !HydcalcSizing.TryEvaluate(curve, null, 1, rpm, ratio, flow, options, out actualHead, out efficiency, out npshr) ||
+                        curve.MinDiameterMm.Value / curve.MaxDiameterMm.Value, out ratio, viscosityCst) ||
+                        !HydcalcSizing.TryEvaluate(curve, null, 1, rpm, ratio, flow, options, out actualHead, out efficiency, out npshr, viscosityCst) ||
+                        (viscosityCst > 1 && flow >= 1.2 * row.BepFlow * speedRatio *
+                            HydcalcSizing.FlowCorrection(curve, rpm, ratio, viscosityCst)) ||
                         (npsha.HasValue && npshr * options.NpshMargin > npsha.Value + 1e-9)) continue;
                     results.Add(new HydcalcSelection
                     {
                         Property = new HydcalcRecord { Id = "Z Excel", Fields = new[] { "Z", row.PumpSize, "", "", "", "", "", "", "", "卧式" } },
                         Curve = curve, Stages = 1, Rpm = rpm, DiameterRatio = ratio, Flow = flow, Head = actualHead,
                         Efficiency = efficiency, Npshr = npshr, PowerKw = 1000 * 9.81 * flow / 3600 * actualHead / (efficiency / 100) / 1000,
-                        Options = options
+                        Options = options, ViscosityCst = viscosityCst
                     });
                 }
             }
@@ -378,9 +381,11 @@ namespace PumpSelectionTools
         public static double RatedEfficiency(HydcalcSelection selection)
         {
             double efficiency, bepFlow, bepEfficiency;
+            if (!HydcalcSizing.TryCorrection(selection.Curve, selection.Rpm, selection.DiameterRatio, selection.ViscosityCst, out var correction))
+                return selection.Efficiency;
             return Calculations.TryGetValidatedPerformancePoint(selection.Property.Field(1), selection.Rpm,
-                selection.Flow, selection.Head, out efficiency, out bepFlow, out bepEfficiency)
-                ? efficiency : selection.Efficiency;
+                selection.Flow / correction.Flow, selection.Head / correction.Head(selection.Flow), out efficiency, out bepFlow, out bepEfficiency)
+                ? efficiency * correction.Efficiency : selection.Efficiency;
         }
     }
 

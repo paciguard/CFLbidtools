@@ -3,7 +3,8 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <DefaultItemExcludes>$(DefaultItemExcludes);vendor/**</DefaultItemExcludes>
+    <ApplicationIcon>wwwroot/favicon.ico</ApplicationIcon>
+    <DefaultItemExcludes>$(DefaultItemExcludes);vendor/**;artifacts/**;deploy/**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="vendor/SDOCtools/ZTools.Offline/ZTools.Offline.csproj" />
@@ -12,5 +13,15 @@
     <Content Include="vendor/SDOCtools/ZTools.Mobile.Shared/web/mobile.js" Link="SdocWeb/mobile.js" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="vendor/SDOCtools/ZTools.Standalone/wwwroot/vendor/*" Link="SdocWeb/vendor/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="vendor/SDOCtools/ZTools.Standalone/wwwroot/cfl-logo.jpg" Link="SdocWeb/cfl-logo.jpg" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <EmbeddedResource Include="vendor/SDOCtools/ZTools.Standalone/wwwroot/cfl-logo.jpg" LogicalName="CflWorkbench.Brand.jpg" />
   </ItemGroup>
+  <Target Name="CflGenerateInstallerPackages" AfterTargets="Rebuild"
+          Condition="'$(DesignTimeBuild)' != 'true' And '$(CflPackageOnRebuild)' != 'false'">
+    <Exec Condition="$([MSBuild]::IsOSPlatform('Windows'))"
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          Command="powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File &quot;deploy\Build-Packages.ps1&quot; -FromRebuild" />
+    <Exec Condition="$([MSBuild]::IsOSPlatform('OSX'))"
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          Command="pwsh -NoLogo -NoProfile -NonInteractive -File &quot;deploy/Build-Packages.ps1&quot; -FromRebuild" />
+  </Target>
 </Project>

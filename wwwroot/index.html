@@ -5,10 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#075962">
   <title>凯乐泵业 · 工程工作台</title>
-  <link rel="icon" href="/icon-192.png">
+  <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48 64x64 256x256">
   <link rel="apple-touch-icon" href="/icon-192.png">
   <link rel="manifest" href="/app.webmanifest">
   <link rel="stylesheet" href="/workbench.css">
+  <script src="/mobile-offline.js" defer></script>
   <script type="module" src="/workbench.js"></script>
 </head>
 <body>
@@ -22,26 +23,63 @@
       <a href="#catalog" data-view="catalog"><i data-lucide="database"></i> 曲线库</a>
       <a href="#submissions" data-view="submissions"><i data-lucide="files"></i> 提交资料</a>
     </nav>
-    <button class="icon-button" id="install" type="button" title="安装工作台" aria-label="安装工作台" hidden><i data-lucide="download"></i></button>
+    <div class="masthead-actions">
+      <button class="icon-button" id="install" type="button" title="安装工作台" aria-label="安装工作台" hidden><i data-lucide="download"></i></button>
+      <button id="exit" type="button"><i data-lucide="log-out"></i> 退出</button>
+    </div>
   </header>
   <main id="pumps" class="surface">
     <section class="duty">
       <div class="section-heading"><h1>泵选型</h1><span>运行工况</span>
         <button id="open-submission" type="button"><i data-lucide="files"></i> 提交资料</button>
       </div>
+      <details class="project-details" id="submission-details" open>
+        <summary>项目基本信息</summary>
+        <form id="submission-details-form">
+          <label>客户名称<input name="client" maxlength="120"></label>
+          <label>项目名称<input name="project" maxlength="120"></label>
+          <label>客户订单号<input name="customerOrder" maxlength="120"></label>
+          <label>图纸公司名称<input name="company" maxlength="120"></label>
+          <label>设备位号<input name="tag" maxlength="40"></label>
+          <label>设备名称 / 用途<input name="service" maxlength="120"></label>
+          <label>设备数量<input name="quantity" type="number" min="1" max="2147483647" step="1"></label>
+          <label>介质名称<input name="liquid" maxlength="80"></label>
+          <label>材质等级<input name="material" maxlength="24"></label>
+          <label>图纸型号（前缀或完整型号）<input name="drawingModel" maxlength="40"></label>
+          <label>项目设备项数<input name="plannedItems" type="number" min="1" max="30" step="1" value="1" required></label>
+        </form>
+        <div class="project-folder-controls">
+          <button id="selection-folder" type="button"><i data-lucide="folder-open"></i> 选择项目目录</button>
+          <output id="selection-folder-status" aria-live="polite"></output>
+        </div>
+      </details>
       <form id="duty-form">
         <label>流量 <span>m³/h</span><input name="flow" type="number" min=".0001" step="any" value="35" required></label>
         <label>扬程 <span>m</span><input name="head" type="number" min=".0001" step="any" value="55" required></label>
         <label>介质密度 <span>kg/m³</span><input name="density" type="number" min=".01" step="any" value="1000" required></label>
+        <label>介质黏度 <span>cP</span><input name="viscosityCp" type="number" min=".000001" step="any" placeholder="按水计算"></label>
         <label>有效汽蚀余量 <span>m</span><input name="npsha" type="number" min="0" step="any" placeholder="不限"></label>
         <label>电源频率 <select name="hz"><option value="50">50 Hz</option><option value="60">60 Hz</option></select></label>
         <label>指定转速 <span>rpm</span><input name="rpm" type="number" min="1" max="100000" step="1" placeholder="不限"></label>
         <label>电机极数 <select name="poles"><option value="">不限</option><option>2</option><option>4</option><option>6</option><option>8</option><option>10</option><option>12</option></select></label>
         <label>介质温度 <span>°C</span><input name="temperature" type="number" step="any" placeholder="不限"></label>
         <label>泵系列 <select name="family"><option value="">全部系列</option></select></label>
+        <label id="x-subtype-label" hidden>X 子型号 <select name="xSubtype" disabled><option value="">X（未指定）</option></select></label>
         <label>API 610 分类 <select name="apiType"><option value="">全部分类</option></select></label>
         <button class="primary" type="submit"><i data-lucide="search"></i> 开始选型</button>
       </form>
+    </section>
+    <section class="duty batch-panel">
+      <div class="panel-heading"><h2>批量泵选型</h2><span id="batch-status" role="status"></span></div>
+      <div class="project-folder-controls">
+        <button id="batch-add" type="button">添加设备项</button><button id="batch-new" type="button" hidden>结束编辑</button>
+        <button id="batch-search" type="button">批量选型</button>
+        <button id="batch-export" type="button">批量导出曲线</button>
+        <button id="batch-transfer" type="button">批量提交资料</button>
+      </div>
+      <div class="table-scroll" tabindex="0" aria-label="批量泵选型">
+        <table><thead><tr><th>设备</th><th>流量 m³/h</th><th>扬程 m</th><th>选型结果</th><th></th></tr></thead><tbody id="batch-items"></tbody></table>
+      </div>
     </section>
     <p id="pump-message" class="notice" role="alert" hidden></p>
     <div class="workspace">
@@ -51,16 +89,31 @@
           <table><thead><tr><th>泵型</th><th>级数</th><th>rpm</th><th>叶轮 mm</th><th>效率 %</th><th>NPSHr m</th><th>功率 kW</th></tr></thead><tbody id="results"></tbody></table>
         </div>
         <p class="empty" id="empty">输入工况后开始选型。</p>
+        <section class="trim-preview" id="trim-preview" aria-labelledby="trim-preview-title" aria-live="polite" hidden>
+          <div class="panel-heading"><h2 id="trim-preview-title">叶轮性能对比</h2><button id="export-trim-data" type="button" disabled><i data-lucide="download"></i> 下载曲线数据</button></div>
+          <div id="trim-curve-comparisons"></div>
+          <p class="trim-disclaimer">扬程和轴功率取自原图；效率由两者计算。NPSHr 来源见表。确认订货前，请向厂家核实叶轮直径及 NPSHr。</p>
+        </section>
       </section>
       <section class="detail-panel">
+        <div class="print-banner">
+          <span><img src="/sdoc-assets/cfl-logo.jpg" width="22" height="22" alt="">凯乐泵业</span>
+          <strong>Pump Performance Curve / 泵性能曲线</strong>
+        </div>
         <div class="panel-heading detail-heading">
-          <div><h2 id="selection-title">性能曲线</h2><p id="selection-subtitle"></p></div>
+          <div><h2 id="selection-title">性能曲线</h2><p id="selection-subtitle"></p><p id="selection-original" hidden></p></div>
           <div class="tools">
+            <button id="export-curve" type="button" disabled><i data-lucide="download"></i> 导出 PDF</button>
             <button class="icon-button" id="print" title="打印 / 保存 PDF" aria-label="打印 / 保存 PDF" disabled><i data-lucide="printer"></i></button>
           </div>
         </div>
         <dl class="metrics" id="metrics" hidden></dl>
         <div id="plots" aria-live="polite"><p class="empty">选择一个泵型查看曲线。</p></div>
+        <section id="trim-graphs" hidden aria-label="叶轮对比曲线">
+          <div class="panel-heading"><h2>叶轮对比曲线</h2><span>仅供参考</span></div>
+          <div id="trim-graph-list"></div>
+        </section>
+        <section id="pump-report" aria-label="Pump selection data sheet"></section>
       </section>
     </div>
   </main>
@@ -68,16 +121,20 @@
     <div class="panel-heading"><h1>泵型曲线库</h1><span id="catalog-count"></span></div>
     <form id="catalog-form" class="catalog-controls">
       <label>系列<select name="family"><option value="">全部系列</option></select></label>
-      <label>型号 / 曲线编号<input name="query" placeholder="例如 50-180" maxlength="80"></label>
+      <label>型号 / 新旧曲线编号<input name="query" placeholder="例如 BB2_1 或 50-180" maxlength="80"></label>
       <button type="submit" class="primary"><i data-lucide="search"></i> 查询</button>
     </form>
     <div class="table-scroll" tabindex="0" aria-label="曲线库">
-      <table><thead><tr><th>系列</th><th>型号</th><th>曲线编号</th><th>rpm</th><th>叶轮范围 mm</th><th>曲线数据点</th><th>来源说明</th></tr></thead><tbody id="catalog-results"></tbody></table>
+      <table><thead><tr><th>系列</th><th>型号</th><th>新曲线编号</th><th>原曲线编号</th><th>rpm</th><th>叶轮范围 mm</th><th>曲线数据点</th><th>来源说明</th></tr></thead><tbody id="catalog-results"></tbody></table>
     </div>
     <div class="pager"><button id="previous" title="上一页" aria-label="上一页"><i data-lucide="chevron-left"></i></button><span id="catalog-page" role="status"></span><button id="next" title="下一页" aria-label="下一页"><i data-lucide="chevron-right"></i></button></div>
   </main>
   <main id="submissions" class="surface documents" hidden>
     <iframe id="submission-frame" title="提交文件工作台"></iframe>
+  </main>
+  <main id="exited" class="surface exit-state" hidden>
+    <h1>已退出工作台</h1>
+    <a href="/">重新打开工作台</a>
   </main>
   <script src="/lucide.min.js" defer></script>
 </body>

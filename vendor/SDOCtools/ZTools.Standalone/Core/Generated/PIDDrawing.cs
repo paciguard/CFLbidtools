@@ -162,15 +162,8 @@ namespace ZTools.Engine {
             // Normalized rule line 59
             @yonghumingcheng = @xlsheet.Range[Vb.Cat("C", 7)].Value2;
             // Normalized rule line 60
-            if (Vb.Bool(Vb.Ne(@xlsheet.Range[Vb.Cat("CN", @i)].Value2, ""))) {
-                // Normalized rule line 61
-                @newpumptype = Vb.Replace(@xlsheet.Range[Vb.Cat("C", @i)].Value2, Vb.Left(@xlsheet.Range[Vb.Cat("C", @i)].Value2, 2), @xlsheet.Range[Vb.Cat("CN", @i)].Value2);
-                // Normalized rule line 62
-            } else {
-                // Normalized rule line 63
-                @newpumptype = @xlsheet.Range[Vb.Cat("C", @i)].Value2;
-                // Normalized rule line 64
-            }
+            @newpumptype = PrintedPumpModel((int)Vb.Int(@i) - 19, Vb.Text(@xlsheet.Range[Vb.Cat("C", @i)].Value2));
+            WritePidIdentity(Vb.Text(@newpumptype));
             // Normalized rule line 65
             @j = Vb.Val(@xlsheet.Range[Vb.Cat("AU", @i)].Value2);
             // Normalized rule line 66
@@ -856,10 +849,6 @@ namespace ZTools.Engine {
                             } else if (Vb.Bool(Vb.Eq(case8, "GUANLUFANGAN"))) {
                                 // Normalized rule line 507
                                 @attrib.TextString = Vb.Text(@xlsheet.Range[Vb.Cat("E", @i)].Value2);
-                                // Normalized rule line 510
-                            } else if (Vb.Bool(Vb.Eq(case8, "TYPE_PUMP"))) {
-                                // Normalized rule line 512
-                                @attrib.TextString = Vb.Text(Vb.Cat("                       ", @newpumptype));
                                 // Normalized rule line 513
                             } else if (Vb.Bool(Vb.Eq(case8, "DATE"))) {
                                 // Normalized rule line 515

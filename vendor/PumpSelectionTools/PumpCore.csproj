@@ -5,6 +5,8 @@
     <PackageReference Include="OxyPlot.Core" Version="2.2.0" />
     <Compile Include="../../PumpResources.cs" Link="PumpResources.cs" />
     <EmbeddedResource Include="Resources/Hydcalc/*.txt" LogicalName="PumpSelectionTools.Hydcalc.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Resources/Hydcalc/CurveNumbers.json" LogicalName="PumpSelectionTools.Hydcalc.CurveNumbers.json" />
+    <EmbeddedResource Include="Resources/Hydcalc/K50551-PDF21.json" LogicalName="PumpSelectionTools.Hydcalc.K50551-PDF21.json" />
     <EmbeddedResource Include="Resources/*.xlsx" LogicalName="PumpSelectionTools.Workbooks.%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

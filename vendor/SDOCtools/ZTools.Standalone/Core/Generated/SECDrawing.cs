@@ -146,15 +146,7 @@ namespace ZTools.Engine {
             // Normalized rule line 60
             @gongsimingcheng = @xlsheet2.Range[Vb.Cat("K", 10)].Value2;
             // Normalized rule line 61
-            if (Vb.Bool(Vb.Ne(@xlsheet.Range[Vb.Cat("CN", @i)].Value2, ""))) {
-                // Normalized rule line 62
-                @newpumptype = Vb.Replace(@xlsheet.Range[Vb.Cat("C", @i)].Value2, Vb.Left(@xlsheet.Range[Vb.Cat("C", @i)].Value2, 2), @xlsheet.Range[Vb.Cat("CN", @i)].Value2);
-                // Normalized rule line 63
-            } else {
-                // Normalized rule line 64
-                @newpumptype = @xlsheet.Range[Vb.Cat("C", @i)].Value2;
-                // Normalized rule line 65
-            }
+            @newpumptype = PrintedPumpModel((int)Vb.Int(@i) - 19, Vb.Text(@xlsheet.Range[Vb.Cat("C", @i)].Value2));
             // Normalized rule line 66
             @j = Vb.Val(@xlsheet.Range[Vb.Cat("AU", @i)].Value2);
             // Normalized rule line 67

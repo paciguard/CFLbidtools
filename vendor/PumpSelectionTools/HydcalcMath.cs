@@ -33,6 +33,12 @@ namespace PumpSelectionTools
         {
             string text;
             if (!curve.Metadata.TryGetValue("TrimInfo", out text)) throw new InvalidOperationException("Missing trim method.");
+            if (text == "Fixed")
+            {
+                if (diameterRatio != 1) throw new InvalidOperationException("Only the documented impeller diameter is available.");
+                qFactor = hFactor = efficiencyFlowFactor = efficiencyFactor = 1;
+                return;
+            }
             string[] fields = text.Split(';');
             double[] c = new double[8];
             for (int i = 0; i < c.Length; i++)

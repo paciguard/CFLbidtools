@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 
 namespace PumpSelectionTools
 {
@@ -10,13 +11,12 @@ namespace PumpSelectionTools
     {
         private static readonly HashSet<string> ExcludedFamilies = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "MBci", "MD_sf", "SMH", "ZA", "ZE", "ZF",
-            "BKC", "CAP8", "HZZ", "MSE"
+            "MBci", "MD_sf", "SMH", "ZA", "ZE", "ZF"
         };
 
         private static readonly Dictionary<string, int> SuctionEyes = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
         {
-            { "BBT", 1 }, { "BBTD", 2 },
+            { "A", 1 }, { "BBT", 1 }, { "BBTD", 2 },
             { "CD", 2 }, { "CD8", 2 }, { "CZ", 1 }, { "GSG", 1 },
             { "MB", 1 }, { "MC", 1 }, { "MD", 1 }, { "MSD", 1 },
             { "MSD-D", 2 }, { "MSD-DD", 2 }, { "OHH", 1 },
@@ -27,7 +27,7 @@ namespace PumpSelectionTools
         {
             { "BBT", new[] { "BB2" } }, { "BBTD", new[] { "BB2" } },
             { "CD", new[] { "BB2" } }, { "CD8", new[] { "BB2" } },
-            { "CZ", new[] { "ISO/ANSY/流程泵" } },
+            { "A", new[] { "ISO/ANSY/流程泵" } }, { "CZ", new[] { "ISO/ANSY/流程泵" } },
             { "GSG", new[] { "BB5" } },
             { "MB", new[] { "BB4" } }, { "MC", new[] { "BB4" } }, { "MD", new[] { "BB4" } },
             { "MSD", new[] { "BB3" } }, { "MSD-D", new[] { "BB3" } }, { "MSD-DD", new[] { "BB3" } },
@@ -97,6 +97,11 @@ namespace PumpSelectionTools
     {
         public string Id { get; set; }
         public string Name { get; set; }
+        internal CurveNumberAssignment NumberAssignment { get; set; }
+        public string CurveNumber => NumberAssignment?.Number ?? Name;
+        public string OriginalCurveNumber => NumberAssignment?.OriginalNumber ?? Name;
+        public string Series => NumberAssignment?.Series ?? Family;
+        public bool AvailableForSelection => !string.Equals(Series, HydcalcCatalog.UnavailableSeries, StringComparison.OrdinalIgnoreCase);
         public string[] Header { get; set; }
         public string Family { get { return Header.Length > 0 ? Header[0] : ""; } }
         public string Size { get { return Header.Length > 1 ? Header[1] : ""; } }
@@ -115,6 +120,8 @@ namespace PumpSelectionTools
         }
     }
 
+    internal sealed record CurveNumberAssignment(string Id, string OriginalNumber, string Number, string Series);
+
     public sealed class HydcalcCatalogGroup
     {
         public string Id { get; set; }
@@ -125,6 +132,9 @@ namespace PumpSelectionTools
 
     public sealed class HydcalcCatalog
     {
+        public const string UnavailableSeries = "NONE";
+        private readonly Dictionary<string, string> seriesByFamily = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
         public List<HydcalcCurve> Curves { get; private set; } = new List<HydcalcCurve>();
         public List<HydcalcRecord> Properties { get; private set; } = new List<HydcalcRecord>();
         public List<HydcalcRecord> Hydraulics { get; private set; } = new List<HydcalcRecord>();
@@ -132,13 +142,50 @@ namespace PumpSelectionTools
         public List<HydcalcCatalogGroup> Groups { get; private set; } = new List<HydcalcCatalogGroup>();
         public List<string> Issues { get; private set; } = new List<string>();
 
-        private static readonly Lazy<HydcalcCatalog> bundled = new Lazy<HydcalcCatalog>(() => Load(name =>
+        private static readonly Lazy<HydcalcCatalog> bundled = new Lazy<HydcalcCatalog>(() =>
         {
-            var stream = typeof(HydcalcCatalog).Assembly.GetManifestResourceStream("PumpSelectionTools.Hydcalc." + name);
-            if (stream == null) throw new FileNotFoundException("Missing bundled catalog: " + name);
-            return new StreamReader(stream);
-        }));
+            var catalog = Load(name => new StreamReader(OpenBundled(name)));
+            using var numbers = OpenBundled("CurveNumbers.json");
+            catalog.ApplyCurveNumbers(numbers);
+            return catalog;
+        });
         public static HydcalcCatalog Bundled { get { return bundled.Value; } }
+
+        public string GetSeries(string family) => seriesByFamily.TryGetValue(family, out var series) ? series : "";
+
+        private static Stream OpenBundled(string name) =>
+            typeof(HydcalcCatalog).Assembly.GetManifestResourceStream("PumpSelectionTools.Hydcalc." + name) ??
+                throw new FileNotFoundException("Missing bundled catalog: " + name);
+
+        private void ApplyCurveNumbers(Stream source)
+        {
+            var assignments = JsonSerializer.Deserialize<CurveNumberAssignment[]>(source) ??
+                throw new InvalidDataException("Missing curve numbers.");
+            var byId = new Dictionary<string, CurveNumberAssignment>(StringComparer.Ordinal);
+            var numbers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var assignment in assignments)
+            {
+                if (assignment == null || string.IsNullOrWhiteSpace(assignment.Id) ||
+                    string.IsNullOrWhiteSpace(assignment.Number) || string.IsNullOrWhiteSpace(assignment.Series) ||
+                    !byId.TryAdd(assignment.Id, assignment) || !numbers.Add(assignment.Number))
+                    throw new InvalidDataException("Blank curve number or series, or duplicate curve number assignment.");
+            }
+            if (byId.Count != Curves.Count)
+                throw new InvalidDataException("Curve number assignments do not cover the bundled catalog.");
+
+            // Keep Name intact: the original source name is the hydraulic-link key.
+            foreach (var curve in Curves)
+            {
+                var expected = string.Join("_", curve.Family, curve.Size, curve.Variant, curve.Name);
+                if (!byId.TryGetValue(curve.Id, out var assignment) ||
+                    !string.Equals(assignment.OriginalNumber, expected, StringComparison.Ordinal))
+                    throw new InvalidDataException("Curve number does not match source record " + curve.Id + ".");
+                if (!seriesByFamily.TryAdd(curve.Family, assignment.Series) &&
+                    !string.Equals(seriesByFamily[curve.Family], assignment.Series, StringComparison.Ordinal))
+                    throw new InvalidDataException("Inconsistent new series for " + curve.Family + ".");
+                curve.NumberAssignment = assignment;
+            }
+        }
 
         public static HydcalcCatalog Load(Func<string, TextReader> open)
         {

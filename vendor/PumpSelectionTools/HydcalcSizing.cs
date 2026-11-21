@@ -2,12 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.CompilerServices;
 
 namespace PumpSelectionTools
 {
     public sealed class HydcalcDuty
     {
         public double Flow, Head, Density = 1000;
+        public double ViscosityCst = 1;
         public double? Npsha, TemperatureC;
         public int Hz = 50;
         public int? Poles;
@@ -32,9 +34,22 @@ namespace PumpSelectionTools
         public double Flow { get; internal set; }
         public double Head { get; internal set; }
         public double PowerKw { get; internal set; }
+        public double ViscosityCst { get; internal set; } = 1;
         public HydcalcSizingOptions Options { get; internal set; }
-        public string HydraulicLabel { get { return Curve.Name + " #" + Curve.Id +
-            (SuctionCurve == null ? "" : " + suction " + SuctionCurve.Name + " #" + SuctionCurve.Id); } }
+        public PdfTrimCurves PdfReference { get; internal set; }
+        public string NpshrSource { get; internal set; }
+        public (double Flow, double Head, double Efficiency, double Npsh)? ViscosityFactors()
+        {
+            if (PdfReference != null) return null;
+            if (!HydcalcSizing.TryCorrection(Curve, Rpm, DiameterRatio, ViscosityCst, out var stage) ||
+                !HydcalcSizing.TryNpshCorrection(SuctionCurve ?? Curve, Rpm, DiameterRatio, Options, ViscosityCst, out var cn))
+                return null;
+            return (stage.Flow, stage.Head(Flow), stage.Efficiency, cn);
+        }
+        public string HydraulicLabel => Curve.CurveNumber +
+            (SuctionCurve == null ? "" : " + suction " + SuctionCurve.CurveNumber);
+        public string OriginalHydraulicLabel => Curve.OriginalCurveNumber +
+            (SuctionCurve == null ? "" : " + suction " + SuctionCurve.OriginalCurveNumber);
         public string HydraulicGroup
         {
             get
@@ -60,6 +75,7 @@ namespace PumpSelectionTools
 
     public static class HydcalcSizing
     {
+        private static readonly ConditionalWeakTable<HydcalcCurve, HydcalcPoint> BepPoints = new();
         public static readonly Dictionary<Tuple<int, int>, int> Speeds = new Dictionary<Tuple<int, int>, int>
         {
             {Tuple.Create(50,2),2950}, {Tuple.Create(50,4),1480}, {Tuple.Create(50,6),980},
@@ -72,7 +88,8 @@ namespace PumpSelectionTools
         {
             options = options ?? new HydcalcSizingOptions();
             if (!Finite(duty.Flow) || duty.Flow <= 0 || !Finite(duty.Head) || duty.Head <= 0 ||
-                !Finite(duty.Density) || duty.Density <= 0 || (duty.Hz != 50 && duty.Hz != 60) ||
+                !Finite(duty.Density) || duty.Density <= 0 || !Finite(duty.ViscosityCst) || duty.ViscosityCst <= 0 ||
+                duty.ViscosityCst > 3000 || (duty.Hz != 50 && duty.Hz != 60) ||
                 (duty.FixedRpm.HasValue && duty.FixedRpm.Value <= 0) ||
                 (duty.Npsha.HasValue && (!Finite(duty.Npsha.Value) || duty.Npsha.Value < 0)) ||
                 (duty.TemperatureC.HasValue && !Finite(duty.TemperatureC.Value)))
@@ -108,13 +125,17 @@ namespace PumpSelectionTools
                 if (!propertyLinks.TryGetValue(property.Id, out links)) continue;
                 var curves = links.Select(l => { HydcalcCurve c; return eligible.TryGetValue(l.Field(1), out c) ? c : null; })
                     .Where(c => c != null).Distinct().ToList();
-                var speeds = Speeds.Where(s => s.Key.Item1 == duty.Hz && (!duty.Poles.HasValue || s.Key.Item2 == duty.Poles.Value))
-                    .Select(s => duty.FixedRpm ?? s.Value).Distinct();
-                foreach (int rpm in speeds)
+                foreach (int rpm in DutySpeeds(duty, minSpeed, maxSpeed))
                 {
                     if (rpm < minSpeed * 60 - 1e-6 || rpm > maxSpeed * 60 + 1e-6) continue;
                     foreach (var curve in curves.Where(c => !Suction(c)))
                     {
+                        if (PdfTrimCurves.For(curve.CurveNumber) is PdfTrimCurves reference)
+                        {
+                            if (minStages == 1 && FromPdf(property, curve, reference, duty, options, rpm) is HydcalcSelection imported)
+                                result.Add(imported);
+                            continue;
+                        }
                         // Uniform stages, plus an optional linked suction impeller as the first stage.
                         var inlets = new List<HydcalcCurve> { null };
                         inlets.AddRange(curves.Where(c => Suction(c) && c.Header[3] == curve.Header[3] &&
@@ -126,20 +147,20 @@ namespace PumpSelectionTools
                             double minimum = curve.MinDiameterMm.Value / curve.MaxDiameterMm.Value;
                             if (inlet != null) minimum = Math.Max(minimum, inlet.MinDiameterMm.Value / inlet.MaxDiameterMm.Value);
                             double trim;
-                            if (!TryDiameter(curve, inlet, stages, rpm, duty.Flow, duty.Head, minimum, out trim)) continue;
+                            if (!TryDiameter(curve, inlet, stages, rpm, duty.Flow, duty.Head, minimum, out trim, duty.ViscosityCst)) continue;
                             double actualHead, efficiency, npshr;
-                            if (!TryEvaluate(curve, inlet, stages, rpm, trim, duty.Flow, options, out actualHead, out efficiency, out npshr)) continue;
+                            if (!TryEvaluate(curve, inlet, stages, rpm, trim, duty.Flow, options, out actualHead, out efficiency, out npshr, duty.ViscosityCst)) continue;
                             if (duty.Npsha.HasValue && npshr * options.NpshMargin > duty.Npsha.Value + 1e-9) continue;
                             double qFactor, hFactor, effQ, effFactor;
                             HydcalcMath.TrimFactors(curve, trim, out qFactor, out hFactor, out effQ, out effFactor);
-                            double qBep = Bep(curve).FlowM3h * rpm / curve.Rpm.Value * qFactor;
+                            double qBep = Bep(curve).FlowM3h * rpm / curve.Rpm.Value * qFactor * FlowCorrection(curve, rpm, trim, duty.ViscosityCst);
                             if (duty.Flow < qBep * options.MinBepRatio || duty.Flow > qBep * options.MaxBepRatio) continue;
                             if (string.Equals(property.Field(0), "CZ", StringComparison.OrdinalIgnoreCase) &&
                                 !seenCz.Add(property.Raw + "|" + curve.Name + "|" + (inlet == null ? "" : inlet.Name) +
                                     "|" + rpm + "|" + stages)) continue;
                             result.Add(new HydcalcSelection { Property = property, Curve = curve, SuctionCurve = inlet,
                                 Stages = stages, Rpm = rpm, DiameterRatio = trim, Efficiency = efficiency,
-                                Npshr = npshr, Flow = duty.Flow, Head = actualHead, Options = options,
+                                Npshr = npshr, Flow = duty.Flow, Head = actualHead, Options = options, ViscosityCst = duty.ViscosityCst,
                                 PowerKw = duty.Density * 9.81 * (duty.Flow / 3600) * actualHead / (efficiency / 100) / 1000 });
                         }
                     }
@@ -148,8 +169,46 @@ namespace PumpSelectionTools
             return result.OrderByDescending(r => r.Efficiency).ThenBy(r => r.Property.Field(0)).ThenBy(r => r.Stages).ToList();
         }
 
+        private static HydcalcSelection FromPdf(HydcalcRecord property, HydcalcCurve curve, PdfTrimCurves reference,
+            HydcalcDuty duty, HydcalcSizingOptions options, int rpm)
+        {
+            // The original catalog entry limits this digitized family to its specified operating speed.
+            var diameter = duty.ViscosityCst <= 1 ? reference.DiameterAtDuty(rpm, duty.Flow, duty.Head) : null;
+            if (diameter is not double trim) return null;
+            var rated = reference.Sample(curve, rpm, trim, duty.Flow);
+            if (rated.Head is not (> 0) || rated.Efficiency is not (> 0 and <= 100) ||
+                rated.Npshr is not (> 0) || rated.WaterPower is not (> 0) ||
+                (duty.Npsha is double available && rated.Npshr.Value * options.NpshMargin > available + 1e-9))
+                return null;
+            var bep = reference.Samples(curve, rpm, trim, duty.Flow)
+                .Where(sample => sample.Efficiency is > 0 and <= 100).MaxBy(sample => sample.Efficiency);
+            if (duty.Flow < bep.Flow * options.MinBepRatio || duty.Flow > bep.Flow * options.MaxBepRatio)
+                return null;
+            return new HydcalcSelection
+            {
+                Property = property, Curve = curve, Stages = 1, Rpm = rpm, DiameterRatio = trim / reference.MaxDiameter,
+                Efficiency = rated.Efficiency.Value, Npshr = rated.Npshr.Value, Flow = duty.Flow, Head = rated.Head.Value,
+                PowerKw = rated.WaterPower.Value * duty.Density / 1000, Options = options, ViscosityCst = duty.ViscosityCst,
+                PdfReference = reference, NpshrSource = rated.NpshrSource
+            };
+        }
+
         private static bool Number(string text, out double value) { return HydcalcCatalog.TryNumber(text, out value); }
         private static bool Finite(double x) { return !double.IsNaN(x) && !double.IsInfinity(x); }
+        private static IEnumerable<int> DutySpeeds(HydcalcDuty duty, double minSpeed, double maxSpeed)
+        {
+            var motors = Speeds.Where(s => s.Key.Item1 == duty.Hz && (!duty.Poles.HasValue || s.Key.Item2 == duty.Poles.Value));
+            if (minSpeed != maxSpeed || duty.FixedRpm.HasValue)
+                return motors.Select(s => duty.FixedRpm ?? s.Value).Distinct();
+
+            // A catalog restricted to one speed uses its recorded RPM, not the generic motor RPM.
+            int rpm = (int)Math.Round(minSpeed * 60);
+            return motors.Any(s =>
+            {
+                double synchronous = 120.0 * duty.Hz / s.Key.Item2;
+                return rpm >= .90 * synchronous && rpm <= 1.02 * synchronous;
+            }) ? new[] { rpm } : Array.Empty<int>();
+        }
         private static bool Suction(HydcalcCurve c)
         {
             string add;
@@ -179,7 +238,9 @@ namespace PumpSelectionTools
             }
             catch (InvalidOperationException) { return false; }
         }
-        public static HydcalcPoint Bep(HydcalcCurve c)
+        public static HydcalcPoint Bep(HydcalcCurve c) => BepPoints.GetValue(c, FindBep);
+
+        private static HydcalcPoint FindBep(HydcalcCurve c)
         {
             int index;
             if (c.Header.Length > 10 && int.TryParse(c.Header[10], out index))
@@ -190,11 +251,19 @@ namespace PumpSelectionTools
             return c.Points.OrderByDescending(p => p.Efficiency).First();
         }
         public static bool TryDiameter(HydcalcCurve curve, HydcalcCurve inlet, int stages, int rpm,
-            double flow, double requiredHead, double minimum, out double trim)
+            double flow, double requiredHead, double minimum, out double trim, double viscosityCst = 1)
         {
             // Start at the smallest diameter with source flow coverage. For
             // non-monotonic curves, bracket every crossing and keep the largest root.
             trim = 0;
+            if (minimum == 1 && curve.Metadata.TryGetValue("TrimInfo", out var method) && method == "Fixed")
+            {
+                // Match the published head to its 0.01 m resolution without interpolating a trim.
+                if (!TryHead(curve, inlet, stages, rpm, 1, flow, out var head, viscosityCst) ||
+                    Math.Abs(head - requiredHead) > .005 + 1e-9) return false;
+                trim = 1;
+                return true;
+            }
             double previousRatio = 0, previousError = 0;
             double lastInvalidRatio = minimum;
             bool previousValid = false, found = false;
@@ -202,7 +271,7 @@ namespace PumpSelectionTools
             {
                 double ratio = minimum + (1 - minimum) * i / 32;
                 double head;
-                bool valid = TryHead(curve, inlet, stages, rpm, ratio, flow, out head);
+                bool valid = TryHead(curve, inlet, stages, rpm, ratio, flow, out head, viscosityCst);
                 if (!valid) { previousValid = false; lastInvalidRatio = ratio; continue; }
                 if (!previousValid && i > 0)
                 {
@@ -213,11 +282,11 @@ namespace PumpSelectionTools
                     for (int step = 0; step < 40; step++)
                     {
                         double boundaryHead, mid = (lo + hi) / 2;
-                        if (TryHead(curve, inlet, stages, rpm, mid, flow, out boundaryHead)) hi = mid;
+                        if (TryHead(curve, inlet, stages, rpm, mid, flow, out boundaryHead, viscosityCst)) hi = mid;
                         else lo = mid;
                     }
                     double firstHead;
-                    if (TryHead(curve, inlet, stages, rpm, hi, flow, out firstHead))
+                    if (TryHead(curve, inlet, stages, rpm, hi, flow, out firstHead, viscosityCst))
                     {
                         previousRatio = hi; previousError = firstHead - requiredHead; previousValid = true;
                     }
@@ -230,7 +299,7 @@ namespace PumpSelectionTools
                     for (int step = 0; step < 55; step++)
                     {
                         double mid = (lo + hi) / 2, midHead;
-                        if (!TryHead(curve, inlet, stages, rpm, mid, flow, out midHead)) break;
+                        if (!TryHead(curve, inlet, stages, rpm, mid, flow, out midHead, viscosityCst)) break;
                         double midError = midHead - requiredHead;
                         if (midError * loError <= 0) hi = mid;
                         else { lo = mid; loError = midError; }
@@ -241,56 +310,108 @@ namespace PumpSelectionTools
             }
             return found;
         }
-        public static bool TryHead(HydcalcCurve curve, HydcalcCurve inlet, int stages, int rpm, double ratio, double flow, out double head)
+        public static bool TryHead(HydcalcCurve curve, HydcalcCurve inlet, int stages, int rpm, double ratio, double flow, out double head,
+            double viscosityCst = 1)
         {
             head = double.NaN;
             double mainHead;
-            if (!StageHead(curve, rpm, ratio, flow, out mainHead)) return false;
+            if (!StageHead(curve, rpm, ratio, flow, viscosityCst, out mainHead)) return false;
             head = mainHead * (stages - (inlet == null ? 0 : 1));
             if (inlet != null)
             {
                 double inletHead;
-                if (!StageHead(inlet, rpm, ratio, flow, out inletHead)) return false;
+                if (!StageHead(inlet, rpm, ratio, flow, viscosityCst, out inletHead)) return false;
                 head += inletHead;
             }
             return head > 0 && Finite(head);
         }
-        private static bool StageHead(HydcalcCurve curve, int rpm, double ratio, double flow, out double head)
+        private static bool StageHead(HydcalcCurve curve, int rpm, double ratio, double flow, double viscosityCst, out double head)
         {
             double qFactor, hFactor, effQ, effFactor;
             HydcalcMath.TrimFactors(curve, ratio, out qFactor, out hFactor, out effQ, out effFactor);
             double speed = rpm / curve.Rpm.Value;
-            if (!HydcalcMath.TryInterpolate(curve.Points, flow / (speed * qFactor), p => p.Head, out head)) return false;
-            head *= speed * speed * hFactor;
-            return head > 0;
+            head = double.NaN;
+            if (!StageCorrection(curve, rpm, speed, qFactor, hFactor, viscosityCst, out var correction) ||
+                !HydcalcMath.TryInterpolate(curve.Points, flow / (speed * qFactor * correction.Flow), p => p.Head, out head))
+                return false;
+            head *= speed * speed * hFactor * correction.Head(flow);
+            return head > 0 && Finite(head);
         }
         public static bool TryEvaluate(HydcalcCurve curve, HydcalcCurve inlet, int stages, int rpm, double ratio,
-            double flow, HydcalcSizingOptions options, out double head, out double efficiency, out double npshr)
+            double flow, HydcalcSizingOptions options, out double head, out double efficiency, out double npshr, double viscosityCst = 1)
         {
             head = efficiency = npshr = double.NaN;
-            if (!TryHead(curve, inlet, stages, rpm, ratio, flow, out head)) return false;
+            if (!TryHead(curve, inlet, stages, rpm, ratio, flow, out head, viscosityCst)) return false;
             double mainHead, mainEfficiency;
-            if (!StageHead(curve, rpm, ratio, flow, out mainHead) || !StageEfficiency(curve, rpm, ratio, flow, out mainEfficiency)) return false;
+            if (!StageHead(curve, rpm, ratio, flow, viscosityCst, out mainHead) ||
+                !StageEfficiency(curve, rpm, ratio, flow, viscosityCst, out mainEfficiency)) return false;
             double headOverEfficiency = (stages - (inlet == null ? 0 : 1)) * mainHead / mainEfficiency;
             if (inlet != null)
             {
                 double inletHead, inletEfficiency;
-                if (!StageHead(inlet, rpm, ratio, flow, out inletHead) || !StageEfficiency(inlet, rpm, ratio, flow, out inletEfficiency)) return false;
+                if (!StageHead(inlet, rpm, ratio, flow, viscosityCst, out inletHead) ||
+                    !StageEfficiency(inlet, rpm, ratio, flow, viscosityCst, out inletEfficiency)) return false;
                 headOverEfficiency += inletHead / inletEfficiency;
             }
             efficiency = head / headOverEfficiency;
-            var first = inlet ?? curve;
-            double speed = rpm / first.Rpm.Value, npshRatio = options.WithNpshCutting ? ratio : 1;
-            if (!HydcalcMath.TryInterpolate(first.Points, flow / (speed * npshRatio), p => p.Npshr, out npshr, true)) return false;
-            npshr *= speed * speed * npshRatio * npshRatio;
-            return Finite(efficiency) && efficiency > 0 && efficiency <= 100 && npshr > 0;
+            return TryNpshr(inlet ?? curve, rpm, ratio, flow, options, viscosityCst, out npshr) &&
+                Finite(efficiency) && efficiency > 0 && efficiency <= 100;
         }
-        private static bool StageEfficiency(HydcalcCurve curve, int rpm, double ratio, double flow, out double efficiency)
+
+        internal static bool TryNpshr(HydcalcCurve first, int rpm, double ratio, double flow,
+            HydcalcSizingOptions options, double viscosityCst, out double npshr)
+        {
+            double speed = rpm / first.Rpm.Value, npshRatio = options.WithNpshCutting ? ratio : 1;
+            double npshScale = speed * npshRatio;
+            npshr = double.NaN;
+            if (!TryNpshCorrection(first, rpm, ratio, options, viscosityCst, out var cn) ||
+                !HydcalcMath.TryInterpolate(first.Points, flow / npshScale, p => p.Npshr, out npshr, true)) return false;
+            npshr *= speed * speed * npshRatio * npshRatio * cn;
+            return npshr > 0 && Finite(npshr);
+        }
+
+        internal static bool TryNpshCorrection(HydcalcCurve first, int rpm, double ratio, HydcalcSizingOptions options,
+            double viscosityCst, out double cn)
+        {
+            cn = 1;
+            if (viscosityCst <= 1) return true;
+            if (!TryCorrection(first, rpm, ratio, viscosityCst, out var correction)) return false;
+            if (correction.Flow == 1) return true;
+            double scale = rpm / first.Rpm.Value * (options.WithNpshCutting ? ratio : 1);
+            if (!HydcalcMath.TryInterpolate(first.Points, correction.WaterBepFlow / scale, p => p.Npshr, out var waterBep, true))
+                return false;
+            cn = correction.Npsh(waterBep * scale * scale, rpm);
+            return Finite(cn) && cn >= 1;
+        }
+
+        internal static double FlowCorrection(HydcalcCurve curve, int rpm, double ratio, double viscosityCst) =>
+            TryCorrection(curve, rpm, ratio, viscosityCst, out var correction) ? correction.Flow : double.NaN;
+
+        internal static bool TryCorrection(HydcalcCurve curve, int rpm, double ratio, double viscosityCst, out HydcalcViscosity correction)
+        {
+            if (viscosityCst <= 1) return HydcalcViscosity.TryCreate(viscosityCst, 0, 0, rpm, out correction);
+            HydcalcMath.TrimFactors(curve, ratio, out var q, out var h, out _, out _);
+            return StageCorrection(curve, rpm, rpm / curve.Rpm.Value, q, h, viscosityCst, out correction);
+        }
+
+        private static bool StageCorrection(HydcalcCurve curve, int rpm, double speed, double q, double h,
+            double viscosityCst, out HydcalcViscosity correction)
+        {
+            if (viscosityCst <= 1) return HydcalcViscosity.TryCreate(viscosityCst, 0, 0, rpm, out correction);
+            var bep = Bep(curve);
+            return HydcalcViscosity.TryCreate(viscosityCst, bep.FlowM3h * speed * q, bep.Head * speed * speed * h, rpm, out correction);
+        }
+
+        private static bool StageEfficiency(HydcalcCurve curve, int rpm, double ratio, double flow, double viscosityCst, out double efficiency)
         {
             double qFactor, hFactor, effQ, effFactor;
             HydcalcMath.TrimFactors(curve, ratio, out qFactor, out hFactor, out effQ, out effFactor);
-            if (!HydcalcMath.TryInterpolate(curve.Points, flow / (rpm / curve.Rpm.Value * effQ), p => p.Efficiency, out efficiency)) return false;
-            efficiency *= effFactor;
+            double speed = rpm / curve.Rpm.Value;
+            efficiency = double.NaN;
+            if (!StageCorrection(curve, rpm, speed, qFactor, hFactor, viscosityCst, out var correction) ||
+                !HydcalcMath.TryInterpolate(curve.Points, flow / (speed * effQ * correction.Flow), p => p.Efficiency, out efficiency))
+                return false;
+            efficiency *= effFactor * correction.Efficiency;
             return efficiency > 0 && efficiency <= 100;
         }
     }

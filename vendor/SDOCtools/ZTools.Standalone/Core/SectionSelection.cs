@@ -4,6 +4,17 @@ using System.Text.RegularExpressions;
 
 namespace ZTools.Engine
 {
+    internal static class ApiEdition
+    {
+        internal static readonly string[] Choices = { "7版", "8版", "10版" };
+
+        internal static int Number(string value)
+        {
+            var match = Regex.Match(value ?? "", @"^\s*(10|8|7)\s*(?:版|th)?\s*$", RegexOptions.IgnoreCase);
+            return match.Success ? int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture) : 0;
+        }
+    }
+
     // DWG blocks and List-all headers use different names for the same assembly.
     internal sealed class SectionSelection
     {
@@ -41,9 +52,9 @@ namespace ZTools.Engine
             string root, drawingRoot;
             if (family == "ZE")
             {
-                var version = Regex.Match(Regex.Replace(revision ?? "", @"\s+", ""), @"^(10|8|7)(?=\D|$)");
-                if (!version.Success) throw new InvalidOperationException("ZE 剖面图版本须为 7、8 或 10：" + revision);
-                drawingRoot = "ZE" + version.Value;
+                int version = ApiEdition.Number(revision);
+                if (version == 0) throw new InvalidOperationException("ZE 剖面图版本须为 7、8 或 10：" + revision);
+                drawingRoot = "ZE" + version;
                 root = drawingRoot + (value.IsG ? "G" : "");
             }
             else root = drawingRoot = family + modifier;

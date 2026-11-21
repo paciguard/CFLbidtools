@@ -3,9 +3,34 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
+using ACadSharp.Entities;
+using CSMath;
+using ZTools.Standalone;
 
 namespace ZTools.Engine
 {
+    internal static class FlangeStandard
+    {
+        public const string Hg20615 = "HG/T 20615";
+        public static readonly string[] Choices = { "ASME", Hg20615, "HG20592", "SH3406", "GB9113.1-2000" };
+
+        public static string Normalize(string value) => value.Trim().ToUpperInvariant() switch
+        {
+            "HG20615" or "HG/T20615" => Hg20615,
+            var standard => standard
+        };
+
+        public static string Hg20615Rating(int rating) => Hg20615 + " Class" + rating + " RF";
+
+        public static string UpdateLegacyRating(string label) => label switch
+        {
+            "HG20615 PN2.0 RF" => Hg20615Rating(150),
+            "HG20615 PN5.0 RF" => Hg20615Rating(300),
+            "HG20615 PN11.0 RF" => Hg20615Rating(600),
+            _ => label
+        };
+    }
+
     internal sealed partial class SubmissionEngine
     {
         private readonly WorkbookSession workbook;
@@ -18,6 +43,79 @@ namespace ZTools.Engine
         { this.workbook = workbook; this.report = report ?? (_ => { }); }
         private void Notify(object message) { report(Vb.Text(message)); }
         private void ChangeField(object name, object value) { Drawing.SetCustomProperty(name, value); }
+        private string MotorModel(int inputRow)
+        {
+            string model = Get("input", inputRow, 19);
+#if CFL_PORTABLE
+            if (string.IsNullOrWhiteSpace(model)) return Get("CFL-App", inputRow, 3);
+#endif
+            return model;
+        }
+
+        private void WriteMotorDrawingProperties(int inputRow)
+        {
+#if CFL_PORTABLE
+            string[] keys = { "Motor series", "Motor explosion protection", "Motor IP rating", "Motor frequency", "Motor drive" };
+            for (int i = 0; i < keys.Length; i++)
+            {
+                string value = Get("CFL-App", inputRow, i + 3);
+                if (!string.IsNullOrWhiteSpace(value)) ChangeField(keys[i], value);
+            }
+#endif
+        }
+        private string PrintedPumpModel(int inputRow, string model)
+        {
+            string label = Get("input", inputRow, 28).Trim();
+            if (label.Length == 0) return model;
+            return Regex.IsMatch(label, @"\d+\s*[-–]\s*\d+")
+                ? label
+                : label + model.Substring(Math.Min(2, model.Length));
+        }
+#if CFL_PORTABLE
+        internal string DrawingFileName(string kind, int index) =>
+            ZTools.Offline.ReportFileName.Drawing(kind, Get("input", 21+index, 4), Get("input", 21+index, 6),
+                PrintedPumpModel(21+index, Get("Sheet1", 40+index, 3)), Get("Sheet1", 40+index, 5),
+                MotorModel(21+index), Get("input", 21+index, 21), Get("input", 21+index, 23), Get("Sheet1", 3, 3));
+#endif
+
+        private void WritePidIdentity(string model)
+        {
+            string company = Get("input", 10, 11).Trim();
+            var document = ((CadAdapter)Drawing).Document;
+            var title = document.Entities.OfType<Insert>().Single(insert => insert.Block.Name == "title");
+            var modelField = title.Attributes.Single(field => field.Tag == "TYPE_PUMP");
+            // PID's legacy model attribute sits in the designer cell. Match the GA/SEC title above the drawing name.
+            modelField.InsertPoint = modelField.AlignmentPoint = new XYZ(368.53, 36.27, 0);
+            modelField.Value = Regex.Replace(model.Trim(), @"\s+", " ");
+            FitPidText(modelField, 29);
+
+            if (company.Length == 0) return;
+            var footer = new TextEntity
+            {
+                Value = Regex.Replace(company, @"\s+", " "), Height = 4, Style = modelField.Style,
+                HorizontalAlignment = TextHorizontalAlignment.Center, AlignmentPoint = new XYZ(368.47, 14.65, 0)
+            };
+            var width = FitPidText(footer, 80);
+            footer.InsertPoint = footer.AlignmentPoint - new XYZ(width / 2, 0, 0);
+            document.Entities.Add(footer);
+        }
+
+        private static double FitPidText(TextEntity text, double width)
+        {
+            var length = DrawingOutput.MeasureTextWidth(text.Value, text.Height);
+            text.WidthFactor = length > width ? width / length : 1;
+            return Math.Min(length, width);
+        }
+
+        internal void UpdateLegacyFlangeLabels(int index)
+        {
+            foreach (int column in new[] { 21, 23, 41 }) // Suction, discharge and cooling flange labels.
+            {
+                string original = Get("Sheet1", 40 + index, column);
+                string updated = FlangeStandard.UpdateLegacyRating(original);
+                if (updated != original) Put("Sheet1", 40 + index, column, updated);
+            }
+        }
         private void InsertPidPlan(object point, object value)
         {
             string plan = Vb.Text(value);
@@ -111,7 +209,11 @@ namespace ZTools.Engine
 
         public void CalculateUtility()
         {
+#if CFL_PORTABLE
+            int count = workbook.ValidateInput(utility: true);
+#else
             int count = workbook.ValidateInput();
+#endif
             var snapshot = new RangeSnapshot(Book, "Utility", "D13:P42");
             try
             {
@@ -234,8 +336,8 @@ namespace ZTools.Engine
         private string PumpDatabaseSheet(object family, object pumpIndex)
         {
             string name = Vb.Text(family);
-            string standard = Regex.Replace(Get("input",21+Vb.Int(pumpIndex),5), @"\s+", "");
-            return name == "ZE" && Regex.IsMatch(standard, @"^7(?=\D|$)") ? "ZE7" : name;
+            int edition = ApiEdition.Number(Get("input",21+Vb.Int(pumpIndex),5));
+            return name == "ZE" && edition == 7 ? "ZE7" : name;
         }
         internal void ValidatePumpDatabaseMatch(string family, string model, int pumpIndex)
         {
@@ -263,7 +365,15 @@ namespace ZTools.Engine
                     found = r-1;
                 }
             if (found >= 0) return found;
+#if CFL_PORTABLE
+            throw new ZTools.Offline.SubmissionInputException(new ZTools.Offline.SubmissionIssue[] {
+                new(k, string.Join(" · ", new[] { Get("input", 21+k, 4), model }.Where(value => !string.IsNullOrWhiteSpace(value))),
+                    "motor", "机座 / GA 底座号", "input!U" + (21+k),
+                    "底座 " + baseplate + " 与该泵在 " + sheet + " 数据库中不匹配。请在电机规格中核对机座号和电压，并检查 API 版本。")
+            });
+#else
             throw new InvalidOperationException(sheet + " 数据库中未找到泵与底座的匹配记录：" + model + " / " + baseplate + "（输入表第 " + (21+k) + " 行）。");
+#endif
         }
         private sealed class RangeSnapshot
         {

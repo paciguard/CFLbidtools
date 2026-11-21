@@ -139,15 +139,8 @@ namespace ZTools.Engine {
             // Normalized rule line 56
             @yonghumingcheng = @xlsheet.Range[Vb.Cat("C", 7)].Value2;
             // Normalized rule line 57
-            if (Vb.Bool(Vb.Ne(@xlsheet.Range[Vb.Cat("CN", @i)].Value2, ""))) {
-                // Normalized rule line 58
-                @newpumptype = Vb.Replace(@xlsheet.Range[Vb.Cat("C", @i)].Value2, Vb.Left(@xlsheet.Range[Vb.Cat("C", @i)].Value2, 2), @xlsheet.Range[Vb.Cat("CN", @i)].Value2);
-                // Normalized rule line 59
-            } else {
-                // Normalized rule line 60
-                @newpumptype = @xlsheet.Range[Vb.Cat("C", @i)].Value2;
-                // Normalized rule line 61
-            }
+            @newpumptype = PrintedPumpModel((int)Vb.Int(@i) - 19, Vb.Text(@xlsheet.Range[Vb.Cat("C", @i)].Value2));
+            WriteMotorDrawingProperties((int)Vb.Int(@i) - 19);
             // Normalized rule line 62
             @j = Vb.Val(@xlsheet.Range[Vb.Cat("AU", @i)].Value2);
             // Normalized rule line 63
