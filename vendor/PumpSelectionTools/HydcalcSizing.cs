@@ -169,7 +169,7 @@ namespace PumpSelectionTools
             return result.OrderByDescending(r => r.Efficiency).ThenBy(r => r.Property.Field(0)).ThenBy(r => r.Stages).ToList();
         }
 
-        private static HydcalcSelection FromPdf(HydcalcRecord property, HydcalcCurve curve, PdfTrimCurves reference,
+        internal static HydcalcSelection FromPdf(HydcalcRecord property, HydcalcCurve curve, PdfTrimCurves reference,
             HydcalcDuty duty, HydcalcSizingOptions options, int rpm)
         {
             // The original catalog entry limits this digitized family to its specified operating speed.
@@ -180,17 +180,29 @@ namespace PumpSelectionTools
                 rated.Npshr is not (> 0) || rated.WaterPower is not (> 0) ||
                 (duty.Npsha is double available && rated.Npshr.Value * options.NpshMargin > available + 1e-9))
                 return null;
+            if (reference.UsesPlottedEfficiency &&
+                Math.Abs(rated.Efficiency.Value - 100 * 9.81 * duty.Flow * rated.Head.Value /
+                    (3600 * rated.WaterPower.Value)) > 6)
+                return null;
             var bep = reference.Samples(curve, rpm, trim, duty.Flow)
-                .Where(sample => sample.Efficiency is > 0 and <= 100).MaxBy(sample => sample.Efficiency);
+                .Where(sample => sample.Efficiency is > 0 and <= 100 && sample.Head is > 0 && sample.WaterPower is > 0)
+                .MaxBy(sample => sample.Efficiency);
             if (duty.Flow < bep.Flow * options.MinBepRatio || duty.Flow > bep.Flow * options.MaxBepRatio)
                 return null;
             return new HydcalcSelection
             {
-                Property = property, Curve = curve, Stages = 1, Rpm = rpm, DiameterRatio = trim / reference.MaxDiameter,
+                Property = property, Curve = curve, Stages = reference.Stages, Rpm = rpm, DiameterRatio = trim / reference.MaxDiameter,
                 Efficiency = rated.Efficiency.Value, Npshr = rated.Npshr.Value, Flow = duty.Flow, Head = rated.Head.Value,
                 PowerKw = rated.WaterPower.Value * duty.Density / 1000, Options = options, ViscosityCst = duty.ViscosityCst,
                 PdfReference = reference, NpshrSource = rated.NpshrSource
             };
+        }
+
+        internal static bool MatchesPublishedSpeed(HydcalcDuty duty, int rpm)
+        {
+            if (duty.FixedRpm.HasValue && !duty.Poles.HasValue) return true;
+            return Speeds.Keys.Any(s => s.Item1 == duty.Hz && (!duty.Poles.HasValue || s.Item2 == duty.Poles) &&
+                rpm >= 0.9 * (120d * duty.Hz / s.Item2) && rpm <= 1.02 * (120d * duty.Hz / s.Item2));
         }
 
         private static bool Number(string text, out double value) { return HydcalcCatalog.TryNumber(text, out value); }

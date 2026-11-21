@@ -449,17 +449,8 @@ try {
   await desktop.locator('#duty-form [name=head]').fill('150');
   await desktop.locator('#duty-form [name=rpm]').fill('2980');
   await desktop.locator('#duty-form button[type=submit]').click();
-  const trim = desktop.locator('#trim-preview');
-  await trim.getByRole('cell', { name: '156.67', exact: true }).waitFor();
-  assert.equal(await trim.getByRole('cell', { name: '原图', exact: true }).count(), 2);
-  assert.equal(await desktop.locator('#trim-graphs img').count(), 3);
-  const trimDownload = desktop.waitForEvent('download');
-  await desktop.locator('#export-trim-data').click();
-  const trimData = await trimDownload;
-  assert.equal(trimData.suggestedFilename(), 'Impeller_Trim_Curves.json');
-  await trimData.saveAs(new URL('Impeller_Trim_Curves.json', out).pathname.slice(1));
-  await desktop.locator('#trim-graphs').screenshot({ path: new URL('trim-graphs-desktop.png', out).pathname.slice(1) });
   await desktop.locator('#results').getByRole('button', { name: 'A 23-40', exact: true }).waitFor();
+  assert.equal(await desktop.locator('#trim-preview, #trim-graphs').count(), 0);
   await desktop.locator('#selection-original').filter({ hasText: '叶轮直径为插值' }).waitFor();
   await desktop.locator('#metrics').filter({ hasText: '308.79' }).waitFor();
   await desktop.locator('#submission-details-form [name=tag]').fill('');
@@ -475,8 +466,13 @@ try {
   }, aName);
   assert.equal(Buffer.from(aPdf).subarray(0, 5).toString(), '%PDF-');
   await writeFile(new URL(aName, out), Buffer.from(aPdf));
-  await trim.screenshot({ path: new URL('trim-preview-desktop.png', out).pathname.slice(1) });
-  await desktop.locator('#duty-form [name=flow]').fill('40');
-  assert.equal(await trim.isVisible(), false);
+  await desktop.locator('nav [data-view=catalog]').click();
+  await desktop.locator('#catalog-form select[name=family]').selectOption('APP');
+  await desktop.locator('#catalog-form input[name=query]').fill('K14130');
+  await desktop.locator('#catalog-form button[type=submit]').click();
+  const appRecord = desktop.locator('#catalog-results tr').filter({ hasText: 'K14130' }).first();
+  await appRecord.getByText('53-200', { exact: true }).waitFor();
+  await appRecord.locator('summary').click();
+  await appRecord.getByText('250-200-500', { exact: false }).waitFor();
   console.log('Passed desktop and phone layouts, A4 curve data sheet, Z and CZ handoff, motor specification and rating locks, calculation, CAD preview, DWG and PDF generation.');
 } finally { await browser.close(); }

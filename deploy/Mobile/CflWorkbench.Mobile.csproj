@@ -4,8 +4,8 @@
     <OutputType>Exe</OutputType>
     <ApplicationTitle>CFL Engineering Workbench</ApplicationTitle>
     <ApplicationId>com.cfl.bidtools</ApplicationId>
-    <ApplicationDisplayVersion>1.2.11</ApplicationDisplayVersion>
-    <ApplicationVersion>14</ApplicationVersion>
+    <ApplicationDisplayVersion>1.2.14</ApplicationDisplayVersion>
+    <ApplicationVersion>17</ApplicationVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">23.0</SupportedOSPlatformVersion>

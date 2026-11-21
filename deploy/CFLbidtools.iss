@@ -8,7 +8,7 @@
 [Setup]
 AppId=CFLbidtools
 AppName=CFL Engineering Workbench
-AppVersion=1.2.11
+AppVersion=1.2.14
 AppPublisher=CFL
 DefaultDirName={localappdata}\Programs\CFLbidtools
 DefaultGroupName=CFL Engineering Workbench

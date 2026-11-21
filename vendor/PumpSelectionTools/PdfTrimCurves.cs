@@ -8,6 +8,10 @@ namespace PumpSelectionTools
 {
     public sealed record PdfTrimCurves(string SourceFile, int Page, string CurveNumber, int Rpm, PdfImpeller[] Impellers)
     {
+        public int Stages { get; init; } = 1;
+        public bool UsesPlottedEfficiency { get; init; }
+        public double[][] SharedNpshr { get; init; } = Array.Empty<double[]>();
+
         private static readonly Lazy<PdfTrimCurves> k50551 = new(() =>
         {
             using var data = typeof(PdfTrimCurves).Assembly.GetManifestResourceStream("PumpSelectionTools.Hydcalc.K50551-PDF21.json")
@@ -63,6 +67,9 @@ namespace PumpSelectionTools
             double speed = (double)rpm / Rpm;
             var flows = hydraulics.SelectMany(trace => trace.Head.Concat(trace.Power)).Concat(npsh.SelectMany(trace => trace.Npshr))
                 .Select(row => row[0] * speed);
+            if (UsesPlottedEfficiency)
+                flows = flows.Concat(Impellers.SelectMany(trace => trace.Power.Concat(trace.Efficiency))
+                    .Concat(SharedNpshr).Select(row => row[0] * speed));
             if (npsh.Any(trace => trace.DiameterMm == original.MaxDiameterMm))
                 flows = flows.Concat(original.Points.Select(point => point.FlowM3h * rpm / original.Rpm.Value));
             return flows.Append(ratedFlow).Distinct().Order()
@@ -83,15 +90,25 @@ namespace PumpSelectionTools
                     ((diameter - traces[0].DiameterMm) / (traces[1].DiameterMm - traces[0].DiameterMm));
             }
             var head = Interpolate(hydraulics, trace => AtFlow(trace.Head, referenceFlow)) * speedSquared;
-            var power = Interpolate(hydraulics, trace => AtFlow(trace.Power, referenceFlow)) * speedSquared * speed;
-            double? efficiency = power is > 0 && head is > 0 && flow > 0 ? 100 * 9.81 * flow * head / (3600 * power) : null;
+            var powerSources = UsesPlottedEfficiency ? Bracket(Impellers.Where(trace => trace.Power.Length > 0), diameter) : hydraulics;
+            var power = Interpolate(powerSources, trace => AtFlow(trace.Power, referenceFlow)) * speedSquared * speed;
+            var efficiency = UsesPlottedEfficiency
+                ? Interpolate(Bracket(Impellers.Where(trace => trace.Efficiency.Length > 0), diameter),
+                    trace => AtFlow(trace.Efficiency, referenceFlow))
+                : power is > 0 && head is > 0 && flow > 0 ? 100 * 9.81 * flow * head / (3600 * power) : null;
+            // The BB2 source labels NPSHr at the sheet level, not at a particular trim.
+            if (SharedNpshr.Length > 0)
+            {
+                var shared = AtFlow(SharedNpshr, referenceFlow) * speedSquared;
+                return new PdfTrimSample(flow, head, power, efficiency, shared, shared == null ? null : "pdf-shared");
+            }
             bool usedReference = false;
             var npshr = Interpolate(npsh, trace =>
             {
                 if (AtFlow(trace.Npshr, referenceFlow) is double value) return value;
+                if (trace.DiameterMm != original.MaxDiameterMm || original.Rpm is not > 0) return null;
                 double inputSpeed = Rpm / original.Rpm.Value;
-                if (trace.DiameterMm != original.MaxDiameterMm ||
-                    !HydcalcMath.TryInterpolate(original.Points, referenceFlow / inputSpeed, p => p.Npshr, out value) ||
+                if (!HydcalcMath.TryInterpolate(original.Points, referenceFlow / inputSpeed, p => p.Npshr, out value) ||
                     value <= 0) return null;
                 usedReference = true;
                 return value * inputSpeed * inputSpeed;
@@ -119,7 +136,10 @@ namespace PumpSelectionTools
         }
     }
 
-    public sealed record PdfImpeller(double DiameterMm, double[][] Head, double[][] Power, double[][] Npshr);
+    public sealed record PdfImpeller(double DiameterMm, double[][] Head, double[][] Power, double[][] Npshr)
+    {
+        public double[][] Efficiency { get; init; } = Array.Empty<double[]>();
+    }
     public readonly record struct PdfTrimSample(double Flow, double? Head, double? WaterPower,
         double? Efficiency, double? Npshr, string NpshrSource);
 }

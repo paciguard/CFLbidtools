@@ -35,6 +35,72 @@ Task<object> Call(string path, object? data = null, bool save = false) =>
     routes.Dispatch("/api/" + path, JsonSerializer.SerializeToElement(data, json), save);
 Task<object> Submit(string command, object? data = null) => Call("submissions/command/" + command, data);
 
+var bb2 = Bb2Catalog.Records;
+Check(bb2.Count == 51 && bb2.Count(r => r.AvailableForSelection) == 36 &&
+    Enumerable.Range(1, 51).All(n => bb2.Count(r => r.CurveNumber == $"BB2_LO_{n}") == 1),
+    "The BB2 rows, review flags, or workbook curve numbers were lost.");
+var bb2Workbench = new PumpWorkbench();
+var bb2Options = JsonSerializer.SerializeToElement(bb2Workbench.Options(), json);
+Check(bb2Options.GetProperty("families").EnumerateArray().Any(f => f.GetString() == "HDD") &&
+    bb2Options.GetProperty("families").EnumerateArray().Any(f => f.GetString() == "KBB"),
+    "BB2 families are missing from the selection options.");
+var held = JsonSerializer.SerializeToElement(bb2Workbench.Catalog("HDD", "BB2_LO_49", 1), json);
+Check(held.GetProperty("total").GetInt32() == 1 &&
+    !held.GetProperty("records")[0].GetProperty("availableForSelection").GetBoolean(),
+    "The partial BB2 sheet is not visible as a review-only curve.");
+PumpRequest? bb2Duty = null;
+PumpHit? bb2Hit = null;
+foreach (var source in bb2.Where(s => s.AvailableForSelection))
+{
+    double[][] Trace(string quantity, double? diameter = null) => source.Traces.Single(t => t.Quantity == quantity &&
+        (diameter == null || t.DiametersMm.SequenceEqual(new[] { diameter.Value }))).Segments.Single();
+    double d = source.DiametersMm[^1];
+    var head = Trace("head", d);
+    var npsh = Trace("npshr");
+    var power = Trace("shaft_power", d);
+    var efficiency = Trace("efficiency", d);
+    var qmin = new[] { head[0][0], npsh[0][0], power[0][0], efficiency[0][0] }.Max();
+    var qmax = new[] { head[^1][0], npsh[^1][0], power[^1][0], efficiency[^1][0] }.Min();
+    PumpHit? hit = null;
+    for (var i = 1; i < 16 && hit == null; i++)
+    {
+        var flow = qmin + (qmax - qmin) * i / 16;
+        var h = PdfTrimCurves.AtFlow(head, flow)!.Value;
+        var p = PdfTrimCurves.AtFlow(power, flow)!.Value;
+        var e = PdfTrimCurves.AtFlow(efficiency, flow)!.Value;
+        var testDuty = new PumpRequest(flow, h, Density: 1100, Rpm: source.Rpm, Family: source.Family, ApiType: "BB2");
+        hit = bb2Workbench.Search(testDuty).SingleOrDefault(pump => pump.Curve == source.CurveNumber);
+        if (hit == null) continue;
+        Check(hit.OriginalCurve == source.OriginalCurveNumber && hit.Size == source.Size && hit.Stages == source.Stages &&
+            hit.Rpm == source.Rpm && Math.Abs(hit.Diameter - d) < 1e-7 && Math.Abs(hit.Power - p * 1.1) < 1e-7 &&
+            Math.Abs(hit.Efficiency - e) < 1e-7 && hit.NpshrSource == "pdf-shared" &&
+            Math.Abs(hit.Npshr - PdfTrimCurves.AtFlow(npsh, flow)!.Value) < 1e-7,
+            $"BB2 curve {source.CurveNumber} did not preserve the source duty point.");
+        if (source.CurveNumber == "BB2_LO_50") (bb2Duty, bb2Hit) = (testDuty, hit);
+    }
+    Check(hit != null, $"BB2 curve {source.CurveNumber} could not be selected at any in-range test duty.");
+}
+Check(bb2Duty != null && bb2Hit != null, "The published two-stage KBB curve could not be selected.");
+var specificBb2Duty = bb2Duty!;
+var specificBb2Hit = bb2Hit!;
+var bb2Trim = bb2Workbench.Search(new PumpRequest(275, 135, Family: "KBB", ApiType: "BB2"))
+    .Single(pump => pump.Curve == "BB2_LO_50");
+Check(bb2Trim is { Stages: 2, Rpm: 1475, InterpolatedTrim: true, Diameter: > 437 and < 439,
+    Npshr: > 2.1 and < 2.2, Power: > 140 and < 145 } && Math.Abs(bb2Trim.Head - 135) < 1e-7,
+    "The two-stage KBB trim did not hit the requested total head.");
+Check(bb2Workbench.Search(specificBb2Duty with { Npsha = .1 }).Length == 0 &&
+    bb2Workbench.Search(specificBb2Duty with { ApiType = "OH2" }).Length == 0 &&
+    bb2Workbench.Search(specificBb2Duty with { Rpm = 2950 }).Length == 0 &&
+    bb2Workbench.Search(specificBb2Duty with { ViscosityCp = 50 }).Length == 0,
+    "BB2 selection did not enforce NPSH, API type, source speed, or viscosity constraints.");
+var bb2Plots = JsonSerializer.SerializeToElement(bb2Workbench.Curves(
+    new CurveRequest(specificBb2Duty, specificBb2Hit.Index)), json);
+Check(bb2Plots.GetProperty("plots").GetArrayLength() == 3 &&
+    bb2Plots.GetProperty("plots")[0].GetString()!.Contains("BB2_LO_50"),
+    "The selected BB2 pump did not produce the three performance plots.");
+using (var pdf = PumpWorkbench.CreateCurvePdf(new CurvePdfRequest(specificBb2Duty, specificBb2Hit.Index, null)))
+    Check(pdf.Content.Length > 5000 && pdf.Name.Contains("KBB380-150x2"), "The selected BB2 pump did not export a PDF.");
+
 var fitModel = new PlotModel();
 var fitLine = new LineSeries();
 DataPoint[] knots = [new(0, 0), new(4, 9), new(9, 7), DataPoint.Undefined, new(14, 8), new(16, 9), new(17, 12)];
@@ -58,7 +124,10 @@ Check(digitized.Points[0] is { X: 0, Y: 1 } && digitized.Points[^1].X == 64 &&
     "Digitized NPSHr fitting changed the duty or endpoints, or left a raster spike.");
 
 var catalog = JsonSerializer.SerializeToElement(await Call("pumps/catalog"), json);
-Check(catalog.GetProperty("total").GetInt32() == 801, "The renumbered catalog is incomplete.");
+var ahlstar = AhlstarCatalog.Bundled;
+Check(ahlstar.PageCount == 3991 && ahlstar.Records.Length == 3766 &&
+    ahlstar.Records.Select(r => r.Page).Distinct().Count() == ahlstar.Records.Length &&
+    catalog.GetProperty("total").GetInt32() == 801 + ahlstar.Records.Length - 1 + bb2.Count, "The combined catalog is incomplete.");
 var catalogCurves = HydcalcCatalog.Bundled.Curves;
 Check(catalogCurves.All(curve => (curve.CurveNumber != curve.Name || curve.Name == "K50551") &&
         curve.OriginalCurveNumber != curve.Name) &&
@@ -66,13 +135,63 @@ Check(catalogCurves.All(curve => (curve.CurveNumber != curve.Name || curve.Name 
     "A curve is missing a unique new number or its original number.");
 var options = JsonSerializer.SerializeToElement(await Call("pumps/options"), json);
 Check(options.GetProperty("families").EnumerateArray().Select(value => value.GetString()).SequenceEqual(
-    new[] { "A", "OHH", "X", "XC", "XDA", "XDB", "XDC", "XMB", "XMC", "XMD", "XMR", "XTT" }),
+    new[] { "A", "APP", "EPP", "HDD", "KBB", "NPP", "OHH", "WPP", "X", "XC", "XDA", "XDB", "XDC", "XMB", "XMC", "XMD", "XMR", "XTT" }),
     "Selection filters are not using the current pump series.");
 var ahlstarCurve = catalogCurves.Single(curve => curve.Name == "K50551");
 Check(ahlstarCurve.Family == "A" && ahlstarCurve.Size == "23-40" && ahlstarCurve.Points.Count == 40 &&
     ahlstarCurve.Issues.Count == 0 && HydcalcCatalog.Bundled.LinkedProperties(ahlstarCurve).Single().Field(0) == "A",
     "The A23-40 curve or hydraulic link is incomplete.");
 var aDuty = new PumpRequest(30, 150, Family: "A");
+foreach (var (family, curve, size, rpm, flow, head) in new[]
+{
+    ("APP", "K14130", "53-200", 985, 450d, 35d),
+    ("EPP", "K15296", "52-350", 1190, 1600d, 30d),
+    ("NPP", "K15413", "31-100", 1770, 200d, 20d),
+    ("WPP", "K15587", "32-80", 860, 60d, 10d),
+    ("A", "K61117", "71-300", 740, 1729.7145204, 26.4343742),
+    ("APP", "K14131", "53-250", 980, 653.3678402, 27.4266908),
+    ("EPP", "K15299", "53-200", 1180, 518.8260708, 43.1931465),
+    ("NPP", "K15414", "32-80", 1770, 161.0763753, 30.8543089),
+    ("WPP", "K15588", "32-100", 860, 81.2031069, 7.2313368),
+    ("A", "K18649", "10-32", 2905, 10.9044531, 15.8974026)
+})
+{
+    var importDuty = new PumpRequest(flow, head, Rpm: rpm, Family: family);
+    var hits = (PumpHit[])await Call("pumps/search", importDuty);
+    var hit = hits.Single(p => p.Curve == curve);
+    Check(hit is { InterpolatedTrim: true, Efficiency: > 0 and < 100, Npshr: > 0, Power: > 0 } &&
+        hit.Curve == curve && hit.OriginalCurve == curve && hit.Series == family && hit.Size == size &&
+        hit.Rpm == rpm && hit.SourcePage is > 0 && Math.Abs(hit.Head - head) < 1e-7,
+        "The verified AHLSTAR path did not work for " + family);
+    var chart = JsonSerializer.SerializeToElement(await Call("pumps/curves", new { duty = importDuty, index = hit.Index }), json);
+    Check(chart.GetProperty("printPlots")[0].GetString()!.Contains(curve), "The original AHLSTAR curve number is missing from the plot.");
+    using var pdf = (WorkbenchDownload)await Call("pumps/export-pdf", new { duty = importDuty, index = hit.Index }, save: true);
+    Check(IsPdf(pdf) && pdf.Name == $"Curve_{family}{size}_{rpm}RPM_V0.pdf", "The AHLSTAR report did not preserve the pump size.");
+    Check(((PumpHit[])await Call("pumps/search", importDuty with { Rpm = rpm + 10 })).All(p => p.Curve != curve),
+        "A bulk import incorrectly allowed an unpublished speed.");
+}
+Check(AhlstarCatalog.VerifiedTraces.Count > 750 &&
+    AhlstarCatalog.VerifiedTraces.Select(curve => curve.Page).Distinct().Count() == AhlstarCatalog.VerifiedTraces.Count &&
+    AhlstarCatalog.VerifiedTraces.All(curve => curve.Impellers.Count(i => i.Npshr.Length > 0) >= 2),
+    "The calibrated bulk AHLSTAR traces are missing or have invalid source-page links.");
+var bulkRows = JsonSerializer.SerializeToElement(await Call("pumps/catalog?family=A&query=K61117"), json);
+Check(bulkRows.GetProperty("records").EnumerateArray().Any(row =>
+    row.GetProperty("availableForSelection").GetBoolean() &&
+    row.GetProperty("source").GetProperty("page").GetInt32() == 321 &&
+    row.GetProperty("tracedDiametersMm").GetArrayLength() == 5),
+    "The three-panel A71-300 legacy curve was not linked to the original sheet.");
+var scanned = JsonSerializer.SerializeToElement(await Call("pumps/catalog?family=A&query=K18649"), json);
+Check(scanned.GetProperty("records").EnumerateArray().Any(row =>
+    row.GetProperty("availableForSelection").GetBoolean() && row.GetProperty("points").GetInt32() > 200 &&
+    row.GetProperty("source").GetProperty("page").GetInt32() == 5 &&
+    row.GetProperty("tracedDiametersMm").GetArrayLength() == 5),
+    "The OCR chart was not linked to its original sheet and five extracted impellers.");
+var documentOnly = JsonSerializer.SerializeToElement(await Call("pumps/catalog?family=APP&query=K14401"), json);
+var documented = documentOnly.GetProperty("records").EnumerateArray().First();
+Check(!documented.GetProperty("availableForSelection").GetBoolean() &&
+    documented.GetProperty("source").GetProperty("minRpm").GetInt32() == 600 &&
+    documented.GetProperty("source").GetProperty("maxRpm").GetInt32() == 1500,
+    "An unreviewed variable-speed chart lost its source range or was enabled for selection.");
 var aSelection = ((PumpHit[])await Call("pumps/search", aDuty)).Single();
 Check(aSelection is { Curve: "K50551", Rpm: 2980, SourceRpm: 2950, Diameter: > 308.78 and < 308.79,
     MinDiameter: 210, MaxDiameter: 330, Efficiency: > 33.98 and < 34, Power: > 36.07 and < 36.08, MotorKw: 45,

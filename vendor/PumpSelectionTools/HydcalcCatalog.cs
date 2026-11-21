@@ -26,6 +26,7 @@ namespace PumpSelectionTools
         private static readonly Dictionary<string, string[]> ApiTypes = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
         {
             { "BBT", new[] { "BB2" } }, { "BBTD", new[] { "BB2" } },
+            { "HDD", new[] { "BB2" } }, { "KBB", new[] { "BB2" } },
             { "CD", new[] { "BB2" } }, { "CD8", new[] { "BB2" } },
             { "A", new[] { "ISO/ANSY/流程泵" } }, { "CZ", new[] { "ISO/ANSY/流程泵" } },
             { "GSG", new[] { "BB5" } },

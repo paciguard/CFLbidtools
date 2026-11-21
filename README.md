@@ -121,6 +121,20 @@ hydraulics; the subtype changes the name on selection results, plots
 and curve PDFs. Leaving it unset keeps the generic X name. ZTools
 drawing-model selection works as before.
 
+The BB2 workbook import adds 51 `BB2_LO_*` curves to the library under `HDD`
+and `KBB`, with the source PDF filename, original reference, and review notes.
+The 36 selectable curves use the plotted metric traces and published RPM and
+stage count. The selector interpolates at the same flow between available trims,
+without speed conversion or curve extrapolation. It uses plotted efficiency and
+shaft power separately, and checks that they agree at the duty point. The shared
+NPSHr trace is provisional for the selected impeller. Curves with incomplete
+traces, paired diameters, conflicting stages, or inconsistent source performance
+remain visible for review, but do not produce selection results.
+
+To regenerate the BB2 data resource, run `scripts/import-bb2-catalog.py` with the
+curve-number workbook, the digitized `BB2_curves.json` export, and
+`vendor/PumpSelectionTools/Resources/Hydcalc/BB2Curves.json` as the output.
+
 AHLSTAR A 23-40 uses the digitized K50551 head and shaft-power traces from
 page 21 of `ahlstar_performance_curves.pdf` (2950 rpm) for normal selection
 at 2980 rpm. The app scales for speed and interpolates between adjacent
@@ -132,9 +146,46 @@ The original 40 points remain in the catalog. Their 330 mm NPSHr values
 supplement the digitized chart where that trace is unclear. NPSHr between
 published traces is interpolated and marked as an estimate. Selection
 does not extend the curves beyond their digitized flow ranges or apply an
-unverified viscosity correction. The comparison and JSON export still
-show all five traces; the selection result and curve PDF flag estimates
-for confirmation with the manufacturer.
+unverified viscosity correction. The selection result and curve PDF flag
+estimates for manufacturer confirmation. The normal selection screen
+shows only the selected curve; the trim data remain available to the
+application's internal routes.
+
+The AHLSTAR source index covers 3,766 pump-curve pages in the 3,991-page
+catalog. It preserves each page's type, size, published curve number and
+available speed and diameter metadata. Pages for range charts, indexes
+and sealing equipment are not individual pump curves. The library
+distinguishes source-only pages from selection data and preserves
+separate metric/US chart pages even when their curve numbers match.
+
+Numerical selection includes K50551, the four individually digitized
+charts, and 867 bulk-extracted fixed-speed vector chart pages. The new
+pages contain 3,292 paired head/power diameter traces and 1,746 NPSHr
+traces. The extractor checks the printed axes, diameter labels and common
+head, power and suction ranges before accepting a chart. Selection
+interpolates NPSHr only between documented traces over an overlapping
+flow range; it does not extrapolate. Variable-speed charts and uncertain
+matches are still searchable but are not used for selection.
+
+The raster import attempted 1,032 image-based pages using local Windows
+OCR and separate line tracing. It enabled 57 A-series pages (31 metric
+and 26 US-unit charts), with 274 paired head/power diameter traces and
+142 NPSHr traces. Both printed flow axes must agree, and a second OCR
+pass checks the head, power and NPSHr units. Intersecting or unmatched
+sections are excluded from the selectable flow domain. The other 975
+image pages remain in the source index, with their first rejection
+reason recorded in the extraction audit.
+
+Run `scripts/import-ahlstar-index.py` and `scripts/import-ahlstar-traces.py`
+with Python and `pypdfium2` to regenerate the embedded source index and
+the individually calibrated traces from the supplied PDF. Run
+`scripts/import-ahlstar-vector.py` to regenerate `AhlstarVector.json.gz`
+and a page-by-page calibration and rejection audit.
+`scripts/import-ahlstar-raster.py` uses `numpy`, `Pillow`, `pypdfium2`
+and the Windows English OCR language pack. Run it first with the vector
+audit to cache OCR labels, then with `--index` and `--output` to trace
+the curves, and finally with `--candidates` to check the units and
+produce `AhlstarRaster.json.gz`. The scripts support `--help`.
 
 ## Deployment packages
 

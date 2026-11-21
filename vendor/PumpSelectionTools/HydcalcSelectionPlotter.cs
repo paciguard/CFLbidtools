@@ -199,7 +199,9 @@ namespace PumpSelectionTools
             Line(power, "Shaft power", OxyColors.Blue, rated, p => p.WaterPower * density / 1000);
             head.Subtitle += $" / digitized at {reference.Rpm} rpm" +
                 (reference.IsPublishedDiameter(diameter) ? "" : " / interpolated trim");
-            npsh.Subtitle = "Estimated; verify with manufacturer";
+            npsh.Subtitle = reference.SharedNpshr.Length > 0
+                ? "Shared PDF trace; verify for selected impeller"
+                : "Estimated; verify with manufacturer";
             AddConvertedAxis(npsh, 3.280839895, "NPSHr (ft)");
             AddConvertedAxis(power, 1.34102209, "Power (hp)");
 

@@ -97,7 +97,8 @@ internal static class PumpCurvePdf
             ("Speed, rated", F(p.Rpm, "rpm")), ("Hydraulic group", p.Group),
             ("Impeller diameter, rated", F(p.Diameter, "mm")), ("Impeller diameter, maximum", F(p.MaxDiameter, "mm")),
             ("Impeller diameter, minimum", F(p.MinDiameter, "mm")), ("Efficiency", F(p.Efficiency, "%")),
-            (p.SourceRpm.HasValue || r.ViscosityCst is > 1 ? "NPSH required (est.)" : "NPSH required", F(p.Npshr, "m")),
+            (p.NpshrSource == "pdf-shared" ? "NPSH required (shared PDF trace)" :
+                p.SourceRpm.HasValue || r.ViscosityCst is > 1 ? "NPSH required (est.)" : "NPSH required", F(p.Npshr, "m")),
             ("NPSH margin required", null), ("Impeller suction", p.Suction),
             ("Ns / Nss (rated BEP est.)", ns), ("MCSF (curve estimate)", F(r.McsfFlow, "m³/h")),
             ("Shutoff head (rated)", F(r.ShutoffHead, "m")),

@@ -89,11 +89,6 @@
           <table><thead><tr><th>泵型</th><th>级数</th><th>rpm</th><th>叶轮 mm</th><th>效率 %</th><th>NPSHr m</th><th>功率 kW</th></tr></thead><tbody id="results"></tbody></table>
         </div>
         <p class="empty" id="empty">输入工况后开始选型。</p>
-        <section class="trim-preview" id="trim-preview" aria-labelledby="trim-preview-title" aria-live="polite" hidden>
-          <div class="panel-heading"><h2 id="trim-preview-title">叶轮性能对比</h2><button id="export-trim-data" type="button" disabled><i data-lucide="download"></i> 下载曲线数据</button></div>
-          <div id="trim-curve-comparisons"></div>
-          <p class="trim-disclaimer">扬程和轴功率取自原图；效率由两者计算。NPSHr 来源见表。确认订货前，请向厂家核实叶轮直径及 NPSHr。</p>
-        </section>
       </section>
       <section class="detail-panel">
         <div class="print-banner">
@@ -109,10 +104,6 @@
         </div>
         <dl class="metrics" id="metrics" hidden></dl>
         <div id="plots" aria-live="polite"><p class="empty">选择一个泵型查看曲线。</p></div>
-        <section id="trim-graphs" hidden aria-label="叶轮对比曲线">
-          <div class="panel-heading"><h2>叶轮对比曲线</h2><span>仅供参考</span></div>
-          <div id="trim-graph-list"></div>
-        </section>
         <section id="pump-report" aria-label="Pump selection data sheet"></section>
       </section>
     </div>

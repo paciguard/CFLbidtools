@@ -37,10 +37,15 @@ public sealed record PumpHit(int Index, string Family, string Size, string ApiTy
     string FlowType, string Group, string Curve, int Stages, int Rpm, double MinDiameter, double Diameter,
     double MaxDiameter, double Head, double Efficiency, double Npshr, double Power, double? MotorKw,
     string Orientation, string OriginalCurve, string Series, string? XSubtype = null,
-    int? SourceRpm = null, bool InterpolatedTrim = false, string? NpshrSource = null)
+    int? SourceRpm = null, bool InterpolatedTrim = false, string? NpshrSource = null, int? SourcePage = null)
 {
     public string ModelSeries => XSubtype ?? Series;
 }
+
+internal sealed record CurveLibraryEntry(string Id, string Family, string Series, bool AvailableForSelection,
+    string Size, string Name, string CurveNumber, string OriginalCurveNumber, double? Rpm,
+    double? MinDiameterMm, double? MaxDiameterMm, int Points, IReadOnlyList<string> Issues,
+    AhlstarSourceRecord? Source = null, string? SourceFile = null, double[]? TracedDiametersMm = null);
 
 public sealed class PumpWorkbench
 {
@@ -77,8 +82,12 @@ public sealed class PumpWorkbench
         var catalog = HydcalcCatalog.Bundled;
         var sourceFamilies = catalog.Properties.Select(p => p.Field(0)).Append("Z").Distinct()
             .Where(family => SeriesEnabled(family, catalog.GetSeries(family))).ToArray();
-        var families = sourceFamilies.Select(catalog.GetSeries).Distinct().Order().ToArray();
-        var apiTypes = sourceFamilies.Select(PumpFamilyPolicy.GetApiTypeLabel)
+        var verifiedPages = AhlstarCatalog.VerifiedTraces.Select(curve => curve.Page).ToHashSet();
+        var ahlstarFamilies = AhlstarCatalog.Bundled.Records.Where(curve => verifiedPages.Contains(curve.Page)).Select(curve => curve.Family);
+        var bb2Families = Bb2Catalog.Records.Where(curve => curve.AvailableForSelection).Select(curve => curve.Family).Distinct();
+        var families = sourceFamilies.Select(catalog.GetSeries).Concat(ahlstarFamilies).Concat(bb2Families)
+            .Distinct().Order().ToArray();
+        var apiTypes = sourceFamilies.Concat(bb2Families).Select(PumpFamilyPolicy.GetApiTypeLabel)
             .SelectMany(type => type.Split('/', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
             .Where(type => type.Length > 0).Distinct().Order().ToList();
         apiTypes.RemoveAll(type => type is "ISO" or "ANSY" or "\u6d41\u7a0b\u6cf5");
@@ -90,22 +99,49 @@ public sealed class PumpWorkbench
     {
         bool Contains(string value) => string.IsNullOrWhiteSpace(query) ||
             value.Contains(query.Trim(), StringComparison.OrdinalIgnoreCase);
-        static string DisplaySeries(HydcalcCurve curve) => curve.AvailableForSelection ? curve.Series : curve.Family;
-        var all = HydcalcCatalog.Bundled.Curves;
+        var ahlstar = AhlstarCatalog.Bundled;
+        var verified = AhlstarCatalog.VerifiedTraces.ToDictionary(curve => curve.Page);
+        var aReference = PdfTrimCurves.For("K50551");
+        var aSource = ahlstar.Records.Single(curve => curve.Page == aReference.Page);
+        CurveLibraryEntry Imported(AhlstarSourceRecord source)
+        {
+            verified.TryGetValue(source.Page, out var data);
+            var diameters = source.TrimDiametersMm.Length != 0 ? source.TrimDiametersMm : source.PlottedDiametersMm ?? [];
+            return new("AHLSTAR-" + source.Page, source.Family, source.Family, data != null, source.Size,
+                source.CurveNumber, source.CurveNumber, source.CurveNumber, source.Rpm,
+                diameters.Length == 0 ? null : diameters.Min(), diameters.Length == 0 ? null : diameters.Max(),
+                data?.Impellers.Sum(impeller => impeller.Head.Length) ?? 0, [],
+                source, ahlstar.SourceFile, data?.Impellers.Select(i => i.DiameterMm).ToArray() ?? source.PlottedDiametersMm);
+        }
+        var all = HydcalcCatalog.Bundled.Curves.Select(curve =>
+            new CurveLibraryEntry(curve.Id, curve.Family, curve.AvailableForSelection ? curve.Series : curve.Family,
+                curve.AvailableForSelection, curve.Size, curve.Name, curve.CurveNumber, curve.OriginalCurveNumber,
+                curve.Rpm, curve.Name == "K50551" ? aReference.MinDiameter : curve.MinDiameterMm,
+                curve.MaxDiameterMm, curve.Points.Count, curve.Issues,
+                curve.Name == "K50551" ? aSource : null, curve.Name == "K50551" ? ahlstar.SourceFile : null,
+                curve.Name == "K50551" ? aReference.Impellers.Select(i => i.DiameterMm).ToArray() : null))
+            .Concat(ahlstar.Records.Where(source => source.Page != aSource.Page).Select(Imported))
+            .Concat(Bb2Catalog.Records.Select(source =>
+            {
+                var diameters = source.DiametersMm;
+                return new CurveLibraryEntry(source.CurveNumber, source.Family, source.Family, source.AvailableForSelection,
+                    source.Size, source.WorkbookLabel, source.CurveNumber, source.OriginalCurveNumber,
+                    source.Rpm, diameters.Min(), diameters.Max(),
+                    source.Traces.Sum(trace => trace.Segments.Sum(segment => segment.Length)),
+                    source.SelectionBlockers.Concat(source.Notes).ToArray(),
+                    SourceFile: source.SourceFile, TracedDiametersMm: diameters);
+            })).ToArray();
         var curves = all.Where(curve =>
-            (MatchesSeries(family, curve.Family, DisplaySeries(curve)) ||
+            (MatchesSeries(family, curve.Family, curve.Series) ||
                 (!curve.AvailableForSelection && string.Equals(family?.Trim(), HydcalcCatalog.UnavailableSeries, StringComparison.OrdinalIgnoreCase))) &&
-            (Contains(curve.CurveNumber) || Contains(curve.OriginalCurveNumber) || Contains(curve.Name) || Contains(curve.Size)));
+            (Contains(curve.CurveNumber) || Contains(curve.OriginalCurveNumber) || Contains(curve.Name) || Contains(curve.Size) ||
+                (curve.SourceFile is string filename && Contains(filename)) ||
+                (curve.Source?.NominalSize is string nominal && Contains(nominal)))).ToArray();
         return new
         {
-            total = curves.Count(), page, pageSize = 30,
-            families = all.Select(DisplaySeries).Distinct().Order(),
-            records = curves.Skip((page - 1) * 30).Take(30).Select(curve => new
-            {
-                curve.Id, curve.Family, series = DisplaySeries(curve), curve.AvailableForSelection,
-                curve.Size, curve.Name, curve.CurveNumber, curve.OriginalCurveNumber, curve.Rpm, curve.MinDiameterMm,
-                curve.MaxDiameterMm, points = curve.Points.Count, curve.Issues
-            })
+            total = curves.Length, page, pageSize = 30,
+            families = all.Select(curve => curve.Series).Distinct().Order(),
+            records = curves.Skip((page - 1) * 30).Take(30)
         };
     }
 
@@ -333,11 +369,15 @@ public sealed class PumpWorkbench
     private static double Efficiency(HydcalcSelection item) =>
         item.Property.Field(0) == "Z" ? HydcalcZSelection.RatedEfficiency(item) : item.Efficiency;
 
+    private static string SelectionSeries(HydcalcSelection item) =>
+        item.PdfReference != null ? item.Curve.Series : HydcalcCatalog.Bundled.GetSeries(item.Property.Field(0));
+
     private static PumpHit Summarize(HydcalcSelection item, double density, int hz, int index, string? subtype)
     {
         var family = item.Property.Field(0);
         var efficiency = Efficiency(item);
-        var power = density * 9.81 * item.Flow / 3600 * item.Head / (efficiency / 100) / 1000;
+        var power = item.PdfReference?.UsesPlottedEfficiency == true ? item.PowerKw :
+            density * 9.81 * item.Flow / 3600 * item.Head / (efficiency / 100) / 1000;
         var motor = MotorRating(power, item.Rpm, hz);
         var minimum = item.PdfReference?.MinDiameter ?? item.Curve.MinDiameterMm!.Value;
         var maximum = item.PdfReference?.MaxDiameter ?? item.Curve.MaxDiameterMm!.Value;
@@ -347,9 +387,9 @@ public sealed class PumpWorkbench
             PumpFamilyPolicy.GetSuctionLabel(family), item.FlowType, item.HydraulicGroup,
             item.HydraulicLabel, item.Stages, item.Rpm, minimum, item.DiameterRatio * maximum,
             maximum, item.Head, efficiency, item.Npshr, power, motor,
-            item.Property.Field(9), item.OriginalHydraulicLabel, HydcalcCatalog.Bundled.GetSeries(family), subtype,
+            item.Property.Field(9), item.OriginalHydraulicLabel, SelectionSeries(item), subtype,
             item.PdfReference?.Rpm, item.PdfReference?.IsPublishedDiameter(item.DiameterRatio * maximum) == false,
-            item.NpshrSource);
+            item.NpshrSource, item.PdfReference?.Page);
     }
 
     private static double? MotorRating(double power, int rpm, int hz)
@@ -393,10 +433,11 @@ public sealed class PumpWorkbench
         var catalog = HydcalcCatalog.Bundled;
         var imported = HydcalcSizing.Search(catalog, input);
         var zPumps = HydcalcZSelection.Search(duty.Flow, duty.Head, duty.Npsha, duty.Hz, duty.Poles, duty.Rpm, viscosity);
-        return zPumps.Concat(imported).Where(item =>
+        return zPumps.Concat(imported).Concat(AhlstarCatalog.Bundled.Search(input, duty.Family, duty.ApiType))
+            .Concat(Bb2Catalog.Search(input, duty.Family, duty.ApiType)).Where(item =>
         {
             var family = item.Property.Field(0);
-            var series = catalog.GetSeries(family);
+            var series = SelectionSeries(item);
             return SeriesEnabled(family, series) && item.Curve.AvailableForSelection &&
                 item.SuctionCurve?.AvailableForSelection != false && PumpFamilyPolicy.MatchesApiType(family, duty.ApiType) &&
                 MatchesSeries(duty.Family, family, series);

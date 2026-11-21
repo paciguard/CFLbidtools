@@ -64,7 +64,7 @@ window.addEventListener('message', event => {
 });
 loadCurveFolder();
 let previousDuty, selected, searchVersion = 0, curveVersion = 0, catalogVersion = 0;
-let printData, trimPreviewDuty;
+let printData;
 let catalogPage = 1, catalogLoaded = false, installPrompt;
 
 async function api(url, body) {
@@ -148,7 +148,6 @@ function invalidateSelection() {
   clearDetails();
   announce();
   $('#results').replaceChildren();
-  clearTrimPreview();
   $('#count').textContent = '';
   $('#empty').textContent = '输入工况后开始选型。';
   $('#empty').hidden = false;
@@ -165,64 +164,6 @@ const readDuty = () => Object.fromEntries([...new FormData(form)].filter(([, val
     .map(([key, value]) => [key, ['family', 'apiType', 'xSubtype'].includes(key) ? value : Number(value)]));
 const viscous = duty => duty.viscosityCp != null && duty.viscosityCp * 1000 / duty.density > 1;
 
-function clearTrimPreview() {
-  trimPreviewDuty = undefined;
-  $('#trim-preview').hidden = true;
-  $('#trim-graphs').hidden = true;
-  $('#export-trim-data').disabled = true;
-}
-
-form.addEventListener('input', clearTrimPreview);
-
-async function showTrimPreview(duty, version) {
-  try {
-    const data = await api('/api/pumps/trim-preview', duty);
-    if (version !== searchVersion || JSON.stringify(duty) !== JSON.stringify(readDuty()) || !data.length) return;
-    const sourceNames = { pdf: '原图', 'supplied-reference': '参考文件',
-      interpolated: '插值', 'interpolated-with-reference': '参考插值' };
-    $('#trim-curve-comparisons').replaceChildren(...data.map(curve => {
-      const group = document.createElement('div');
-      const title = text('h3', curve.series + ' ' + curve.size + ' · ' + curve.curve + ' · ' +
-        curve.rpm + ' rpm · ' + number(curve.flow) + ' m³/h');
-      const citation = text('p', '原图第 ' + curve.sourcePage + ' 页 · ' + curve.sourceRpm + ' rpm' +
-        (curve.rpm === curve.sourceRpm ? '' : ' → ' + curve.rpm + ' rpm（换速）'));
-      citation.className = 'trim-preview-source';
-      const holder = document.createElement('div');
-      holder.className = 'table-scroll';
-      const table = document.createElement('table');
-      const heading = table.createTHead().insertRow();
-      heading.append(...['叶轮 mm', '扬程 m', '差值 m', '效率 %', 'NPSHr m', 'NPSHr 来源'].map(label => text('th', label)));
-      const body = table.createTBody();
-      for (const point of curve.points) {
-        const row = body.insertRow();
-        row.dataset.source = point.npshrSource ?? '';
-        const difference = point.head == null ? null : Math.round((point.head - curve.requestedHead) * 100) / 100;
-        const source = sourceNames[point.npshrSource] ?? '—';
-        row.append(...['Ø' + number(point.diameter), number(point.head),
-          (difference > 0 ? '+' : '') + number(difference), number(point.efficiency),
-          number(point.npshr), source].map(value => text('td', value)));
-      }
-      holder.append(table);
-      group.append(title, citation, holder);
-      return group;
-    }));
-    const plotLabels = ['流量–扬程', '流量–效率', '流量–NPSHr'];
-    $('#trim-graph-list').replaceChildren(...data.flatMap(curve => curve.plots.map((svg, index) => {
-      const figure = document.createElement('figure');
-      const image = new Image();
-      image.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
-      image.alt = curve.series + ' ' + curve.size + ' ' + plotLabels[index] + '（原图及换算）';
-      figure.append(image);
-      return figure;
-    })));
-    trimPreviewDuty = duty;
-    $('#trim-preview').hidden = false;
-    $('#trim-graphs').hidden = false;
-    $('#export-trim-data').disabled = false;
-    if (!$('#empty').hidden) $('#empty').textContent = '原始曲线未匹配该工况。';
-  } catch (error) { if (version === searchVersion) announce(error.message); }
-}
-
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   if (!projectForm.checkValidity()) { $('#submission-details').open = true; projectForm.reportValidity(); return; }
@@ -232,14 +173,12 @@ form.addEventListener('submit', async (event) => {
   clearDetails();
   announce();
   $('#results').replaceChildren();
-  clearTrimPreview();
   $('#empty').hidden = true;
   $('#count').textContent = '正在选型…';
   try {
     const results = await api('/api/pumps/search', duty);
     if (version !== searchVersion) return;
     previousDuty = duty;
-    if (duty.family === 'A' && !viscous(duty)) showTrimPreview(duty, version);
     $('#count').textContent = results.length + ' 个结果';
     $('#empty').hidden = results.length > 0;
     $('#empty').textContent = viscous(duty)
@@ -281,8 +220,10 @@ async function showPump(pump, row, duty) {
   $('#selection-subtitle').textContent = [pump.apiType, pump.stages + ' 级', pump.rpm + ' rpm',
     pump.flowType && '流型 ' + pump.flowType, pump.group && '水力组 ' + pump.group, pump.curve].filter(Boolean).join(' · ');
   const source = pump.sourceRpm ? [
-    '原图 ' + pump.sourceRpm + ' rpm', pump.sourceRpm !== pump.rpm && '已换算转速',
-    pump.interpolatedTrim && '叶轮直径为插值', 'NPSHr 估算，需向厂家核实'
+    (pump.sourcePage ? '原图第 ' + pump.sourcePage + ' 页' : '原图') + ' · ' + pump.sourceRpm + ' rpm',
+    pump.sourceRpm !== pump.rpm && '已换算转速',
+    pump.interpolatedTrim && '叶轮直径为插值',
+    pump.npshrSource === 'pdf-shared' ? '共用 NPSHr 曲线，需核实所选叶轮' : 'NPSHr 估算，需向厂家核实'
   ].filter(Boolean).join(' · ') : '';
   $('#selection-original').textContent = [pump.originalCurve && '原曲线编号：' + pump.originalCurve, source]
     .filter(Boolean).join(' · ');
@@ -349,22 +290,6 @@ function downloadBlob({ name, blob }) {
   link.remove();
   setTimeout(() => URL.revokeObjectURL(link.href), 30000);
 }
-
-$('#export-trim-data').onclick = async () => {
-  const duty = trimPreviewDuty;
-  if (!duty) return;
-  $('#export-trim-data').disabled = true;
-  try {
-    const path = '/api/pumps/export-trim-data';
-    if (window.cflOfflineSave) await window.cflOfflineSave(path, duty);
-    else {
-      const response = await exportRequest(path, duty);
-      if (!response.ok) throw new Error('无法导出叶轮估算数据。');
-      downloadBlob(await downloadExport(response, 'Impeller_Trim_Curves.json'));
-    }
-  } catch (error) { if (error.name !== 'AbortError') announce(error.message); }
-  finally { if (trimPreviewDuty === duty) $('#export-trim-data').disabled = false; }
-};
 
 async function exportCurves(items, count) {
   if (exporting) throw new Error('另一个导出正在进行。');
@@ -480,10 +405,27 @@ async function loadCatalog() {
     $('#next').disabled = catalogPage >= pages;
     $('#catalog-results').replaceChildren(...data.records.map(curve => {
       const row = document.createElement('tr');
-      const notes = [...(curve.availableForSelection ? [] : ['未开放选型']), ...curve.issues];
-      row.append(...[curve.series, curve.size, curve.curveNumber, curve.originalCurveNumber, number(curve.rpm, 0),
+      const source = curve.source;
+      const notes = [...(curve.availableForSelection ? [] : [source ? '仅图册记录，未开放选型' : '未开放选型']), ...curve.issues];
+      const rpm = source?.minRpm && source?.maxRpm ? number(source.minRpm, 0) + '–' + number(source.maxRpm, 0) : number(curve.rpm, 0);
+      row.append(...[curve.series, curve.size, curve.curveNumber, curve.originalCurveNumber, rpm,
         number(curve.minDiameterMm) + ' / ' + number(curve.maxDiameterMm),
-        curve.points, notes.join(' · ') || '—'].map(value => text('td', value)));
+        curve.points || '—'].map(value => text('td', value)));
+      const provenance = text('td', notes.join(' · ') || (source ? 'AHLSTAR' : '—'));
+      if (source) {
+        const details = document.createElement('details');
+        details.append(text('summary', 'AHLSTAR PDF · 第 ' + source.page + ' 页'));
+        if (source.nominalSize) details.append(text('p', '原图规格：' + source.nominalSize));
+        if (source.impeller) details.append(text('p', '叶轮：' + source.impeller));
+        if (source.trimDiametersMm.length)
+          details.append(text('p', '直径表（mm）：' + source.trimDiametersMm.map(d => number(d)).join('、')));
+        if (curve.tracedDiametersMm?.length)
+          details.append(text('p', '图示直径（mm）：' + curve.tracedDiametersMm.map(d => number(d)).join('、')));
+        provenance.append(details);
+      } else if (curve.sourceFile) {
+        provenance.append(text('p', curve.sourceFile));
+      }
+      row.append(provenance);
       return row;
     }));
   } catch (error) { if (version === catalogVersion) $('#catalog-count').textContent = error.message; }
