@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Text.Json;
+using NPOI.XSSF.UserModel;
 using OxyPlot;
 using OxyPlot.Series;
 using PumpSelectionTools;
@@ -35,17 +36,79 @@ Task<object> Call(string path, object? data = null, bool save = false) =>
     routes.Dispatch("/api/" + path, JsonSerializer.SerializeToElement(data, json), save);
 Task<object> Submit(string command, object? data = null) => Call("submissions/command/" + command, data);
 
+var appVersion = (WorkbenchVersion)await Call("version");
+Check(Version.TryParse(appVersion.Version, out _) && int.TryParse(appVersion.BuildNumber, out var build) && build > 0 &&
+    appVersion.Notes.Contains("## " + appVersion.Version, StringComparison.Ordinal),
+    "The offline version log disagrees with the build or release notes.");
+
 var bb2 = Bb2Catalog.Records;
+const string kbbCurve = "BB2_LO_KBB_380-150x2_316";
+const string heldHddCurve = "BB2_LO_HDD_180-440x3_315";
 Check(bb2.Count == 51 && bb2.Count(r => r.AvailableForSelection) == 36 &&
-    Enumerable.Range(1, 51).All(n => bb2.Count(r => r.CurveNumber == $"BB2_LO_{n}") == 1),
-    "The BB2 rows, review flags, or workbook curve numbers were lost.");
+    bb2.Count(r => r.Family == "HDD") == 49 && bb2.Count(r => r.Family == "KBB") == 2 &&
+    bb2.All(r => r.Series == "XDB") &&
+    bb2.Sum(r => r.Traces.Sum(t => t.Segments.Sum(s => s.Length))) == 14440 &&
+    Enumerable.Range(1, 51).All(n => bb2.Count(r => r.PreviousCurveNumber == $"BB2_LO_{n}" &&
+        r.CurveNumber == $"BB2_LO_{r.Family}_{r.Size}_{266 + n}") == 1),
+    "The BB2 rows, trace points, review flags, or XDB curve numbers were lost.");
 var bb2Workbench = new PumpWorkbench();
+var lowFlowDuty = new PumpRequest(5, 50, Density: 1110, Hz: 50, Poles: 2, Family: "X", ViscosityCp: 1);
+var lowFlowHit = bb2Workbench.Search(lowFlowDuty).Single(pump => pump.Curve == "OH_700");
+Check(lowFlowHit is { Size: "25-200", Series: "X", Rpm: 2950, MinDiameter: 130, MaxDiameter: 209,
+        Diameter: > 184 and < 186, Clearance: "API" } && Math.Abs(lowFlowHit.Head - 50) < 1e-6,
+    "The X 25-200 did not match the screenshot's 5 m3/h and 50 m duty.");
+var comparisonDuty = lowFlowDuty with { Rpm = 2975 };
+var comparisonHit = bb2Workbench.Search(comparisonDuty).Single(pump => pump.Curve == "OH_700");
+Check(comparisonHit is { Diameter: > 183 and < 183.5, Npshr: > .335 and < .337 } &&
+    Math.Abs(comparisonHit.Head - 50) < 1e-6,
+    "X 25-200 trim and NPSHr did not match the HydCalc speed comparison.");
+var lowFlowReport = JsonSerializer.SerializeToElement(bb2Workbench.Curves(new(lowFlowDuty, lowFlowHit.Index)), json);
+Check(lowFlowReport.GetProperty("report").GetProperty("mcsfFlow").GetDouble() is > 4.35 and < 4.5 &&
+    !bb2Workbench.Search(lowFlowDuty with { Flow = 4.7 }).Any(pump => pump.Curve == "OH_700") &&
+    !bb2Workbench.Search(comparisonDuty with { Flow = 4.7 }).Any(pump => pump.Curve == "OH_700"),
+    "X 25-200 selection must follow the plotted minimum flow and retain its safety margin.");
+var ratingDuty = new PumpRequest(20, 110, Density: 790, Rpm: 2950, Family: "X", XSubtype: "XA", ViscosityCp: 1);
+var originalRating = bb2Workbench.Search(ratingDuty).Single(pump => pump.Curve == "OH_716");
+var manualRating = new PumpRatingOverride(Efficiency: 45, Npshr: 1.25);
+var adjustedRating = PumpWorkbench.BuildReport(new(ratingDuty, originalRating.Index, RatingOverride: manualRating));
+double ratedShaftPower = ratingDuty.Density * 9.81 * ratingDuty.Flow * originalRating.Head / (3600000 * .45);
+Check(adjustedRating.Pump is { Efficiency: 45, Npshr: 1.25 } &&
+    adjustedRating.Pump.Diameter == originalRating.Diameter && adjustedRating.Pump.Head == originalRating.Head &&
+    Math.Abs(adjustedRating.Pump.Power - ratedShaftPower) < 1e-9 &&
+    adjustedRating.Pump.MotorKw == 15 && adjustedRating.Pump.RatingOverride == manualRating,
+    "Manual rating changed the hydraulic selection or did not recalculate shaft power and motor sizing.");
+foreach (var (panel, title, expected) in new[] { (0, "Efficiency (%) (manual)", 45d), (1, "NPSHr", 1.25), (2, "Shaft power", ratedShaftPower) })
+{
+    var curve = adjustedRating.Plots[panel].Series.OfType<LineSeries>().Single(line => line.Title == title);
+    Check(curve.Points.Any(point => Math.Abs(point.X - ratingDuty.Flow) < 1e-9 && Math.Abs(point.Y - expected) < 1e-9),
+        "The edited curve missed the manual duty point: " + title);
+}
+var npshOnly = bb2Workbench.GetSelection(ratingDuty, originalRating.Index, new(Npshr: 1.25));
+Check(npshOnly.Power == originalRating.Power && npshOnly.Efficiency == originalRating.Efficiency &&
+    bb2Workbench.GetSelection(ratingDuty, originalRating.Index) == originalRating,
+    "An NPSHr-only adjustment changed power or the unmodified catalog result.");
+var npshLimitedDuty = ratingDuty with { Npsha = 2 };
+var npshLimitedIndex = bb2Workbench.Search(npshLimitedDuty).Single(pump => pump.Curve == "OH_716").Index;
+foreach (var invalid in new[] { new PumpRatingOverride(101), new PumpRatingOverride(0), new PumpRatingOverride(Npshr: -1),
+    new PumpRatingOverride(Npshr: 3) })
+{
+    try
+    {
+        bb2Workbench.GetSelection(npshLimitedDuty, npshLimitedIndex, invalid);
+        throw new InvalidOperationException("An invalid manual rating was accepted.");
+    }
+    catch (ArgumentException) { }
+}
+using (var ratedPdf = PumpWorkbench.CreateCurvePdf(new(ratingDuty, originalRating.Index, null, manualRating)))
+    Check(ratedPdf.Content.Length > 5000 && ratedPdf.Name.Contains("XA40-315"), "The revised performance PDF did not export.");
+
 var bb2Options = JsonSerializer.SerializeToElement(bb2Workbench.Options(), json);
-Check(bb2Options.GetProperty("families").EnumerateArray().Any(f => f.GetString() == "HDD") &&
-    bb2Options.GetProperty("families").EnumerateArray().Any(f => f.GetString() == "KBB"),
-    "BB2 families are missing from the selection options.");
-var held = JsonSerializer.SerializeToElement(bb2Workbench.Catalog("HDD", "BB2_LO_49", 1), json);
+Check(bb2Options.GetProperty("families").EnumerateArray().Any(f => f.GetString() == "XDB") &&
+    bb2Options.GetProperty("families").EnumerateArray().All(f => f.GetString() is not ("HDD" or "KBB")),
+    "HDD and KBB must share the XDB selection option.");
+var held = JsonSerializer.SerializeToElement(bb2Workbench.Catalog("XDB", heldHddCurve, 1), json);
 Check(held.GetProperty("total").GetInt32() == 1 &&
+    held.GetProperty("records")[0].GetProperty("id").GetString() == "BB2_LO_49" &&
     !held.GetProperty("records")[0].GetProperty("availableForSelection").GetBoolean(),
     "The partial BB2 sheet is not visible as a review-only curve.");
 PumpRequest? bb2Duty = null;
@@ -68,38 +131,45 @@ foreach (var source in bb2.Where(s => s.AvailableForSelection))
         var h = PdfTrimCurves.AtFlow(head, flow)!.Value;
         var p = PdfTrimCurves.AtFlow(power, flow)!.Value;
         var e = PdfTrimCurves.AtFlow(efficiency, flow)!.Value;
-        var testDuty = new PumpRequest(flow, h, Density: 1100, Rpm: source.Rpm, Family: source.Family, ApiType: "BB2");
+        var testDuty = new PumpRequest(flow, h, Density: 1100, Rpm: source.Rpm, Family: source.Series, ApiType: "BB2");
         hit = bb2Workbench.Search(testDuty).SingleOrDefault(pump => pump.Curve == source.CurveNumber);
         if (hit == null) continue;
-        Check(hit.OriginalCurve == source.OriginalCurveNumber && hit.Size == source.Size && hit.Stages == source.Stages &&
+        Check(hit.Series == "XDB" && hit.Family == source.Family && hit.ApiType == "BB2" &&
+            hit.OriginalCurve == source.OriginalCurveNumber && hit.Size == source.Size && hit.Stages == source.Stages &&
             hit.Rpm == source.Rpm && Math.Abs(hit.Diameter - d) < 1e-7 && Math.Abs(hit.Power - p * 1.1) < 1e-7 &&
             Math.Abs(hit.Efficiency - e) < 1e-7 && hit.NpshrSource == "pdf-shared" &&
             Math.Abs(hit.Npshr - PdfTrimCurves.AtFlow(npsh, flow)!.Value) < 1e-7,
             $"BB2 curve {source.CurveNumber} did not preserve the source duty point.");
-        if (source.CurveNumber == "BB2_LO_50") (bb2Duty, bb2Hit) = (testDuty, hit);
+        if (source.CurveNumber == kbbCurve) (bb2Duty, bb2Hit) = (testDuty, hit);
     }
     Check(hit != null, $"BB2 curve {source.CurveNumber} could not be selected at any in-range test duty.");
 }
 Check(bb2Duty != null && bb2Hit != null, "The published two-stage KBB curve could not be selected.");
 var specificBb2Duty = bb2Duty!;
 var specificBb2Hit = bb2Hit!;
-var bb2Trim = bb2Workbench.Search(new PumpRequest(275, 135, Family: "KBB", ApiType: "BB2"))
-    .Single(pump => pump.Curve == "BB2_LO_50");
+var bb2Trim = bb2Workbench.Search(new PumpRequest(275, 135, Family: "XDB", ApiType: "BB2"))
+    .Single(pump => pump.Curve == kbbCurve);
 Check(bb2Trim is { Stages: 2, Rpm: 1475, InterpolatedTrim: true, Diameter: > 437 and < 439,
     Npshr: > 2.1 and < 2.2, Power: > 140 and < 145 } && Math.Abs(bb2Trim.Head - 135) < 1e-7,
     "The two-stage KBB trim did not hit the requested total head.");
-Check(bb2Workbench.Search(specificBb2Duty with { Npsha = .1 }).Length == 0 &&
-    bb2Workbench.Search(specificBb2Duty with { ApiType = "OH2" }).Length == 0 &&
-    bb2Workbench.Search(specificBb2Duty with { Rpm = 2950 }).Length == 0 &&
-    bb2Workbench.Search(specificBb2Duty with { ViscosityCp = 50 }).Length == 0,
+bool SelectsKbbCurve(PumpRequest duty) => bb2Workbench.Search(duty).Any(p => p.Curve == kbbCurve);
+Check(!SelectsKbbCurve(specificBb2Duty with { Npsha = .1 }) &&
+    !SelectsKbbCurve(specificBb2Duty with { ApiType = "OH2" }) &&
+    !SelectsKbbCurve(specificBb2Duty with { Rpm = 2950 }) &&
+    !SelectsKbbCurve(specificBb2Duty with { ViscosityCp = 50 }),
     "BB2 selection did not enforce NPSH, API type, source speed, or viscosity constraints.");
+Check(bb2Workbench.Search(specificBb2Duty with { Stages = 2 }).Any(p => p.Curve == kbbCurve &&
+        p.StageLimits == new StageRange(2, 2)) &&
+    !SelectsKbbCurve(specificBb2Duty with { Stages = 1 }) &&
+    !SelectsKbbCurve(specificBb2Duty with { Clearance = "API" }),
+    "A fixed-stage BB2 trace changed its stage count or was used as an API-clearance curve without evidence.");
 var bb2Plots = JsonSerializer.SerializeToElement(bb2Workbench.Curves(
     new CurveRequest(specificBb2Duty, specificBb2Hit.Index)), json);
 Check(bb2Plots.GetProperty("plots").GetArrayLength() == 3 &&
-    bb2Plots.GetProperty("plots")[0].GetString()!.Contains("BB2_LO_50"),
+    bb2Plots.GetProperty("plots")[0].GetString()!.Contains(kbbCurve),
     "The selected BB2 pump did not produce the three performance plots.");
 using (var pdf = PumpWorkbench.CreateCurvePdf(new CurvePdfRequest(specificBb2Duty, specificBb2Hit.Index, null)))
-    Check(pdf.Content.Length > 5000 && pdf.Name.Contains("KBB380-150x2"), "The selected BB2 pump did not export a PDF.");
+    Check(pdf.Content.Length > 5000 && pdf.Name.Contains("XDB380-150x2"), "The selected BB2 pump did not export an XDB PDF.");
 
 var fitModel = new PlotModel();
 var fitLine = new LineSeries();
@@ -127,17 +197,234 @@ var catalog = JsonSerializer.SerializeToElement(await Call("pumps/catalog"), jso
 var ahlstar = AhlstarCatalog.Bundled;
 Check(ahlstar.PageCount == 3991 && ahlstar.Records.Length == 3766 &&
     ahlstar.Records.Select(r => r.Page).Distinct().Count() == ahlstar.Records.Length &&
-    catalog.GetProperty("total").GetInt32() == 801 + ahlstar.Records.Length - 1 + bb2.Count, "The combined catalog is incomplete.");
+    catalog.GetProperty("total").GetInt32() == 801 + ahlstar.Records.Length - 1 + bb2.Count +
+        SmCatalog.Bundled.Records.Length + RegisteredMultistageCatalog.Records.Count,
+    "The combined catalog is incomplete.");
 var catalogCurves = HydcalcCatalog.Bundled.Curves;
+var registered = RegisteredMultistageCatalog.Records;
+Check(registered.Count == 71 && registered.Count(row => row.ApiType == "BB3" && row.AvailableForSelection) == 19 &&
+    registered.Count(row => row.ApiType == "BB4" && row.AvailableForSelection) == 40,
+    "The register or engineering review flags were lost.");
+foreach (var (api, start, count) in new[] { ("BB3", 448, 31), ("BB4", 414, 40) })
+{
+    var codes = registered.Where(row => row.ApiType == api).Select(row => int.Parse(row.CurveNumber.Split('_')[^1]));
+    Check(codes.SequenceEqual(Enumerable.Range(start, count)), api + " numbering did not continue in register order.");
+}
+var correctedRegisterRow = registered.Single(row => row.CurveNumber == "BB3_LO_SCSK_125-75_454");
+Check(correctedRegisterRow.Size == "125-75" && correctedRegisterRow.RegisterCode == "BB3_LO_SCSK_125-7" &&
+    correctedRegisterRow.StageLimits.SequenceEqual(new[] { 3, 12 }) &&
+    correctedRegisterRow.ReferenceStages == null && !correctedRegisterRow.AvailableForSelection,
+    "The confirmed correction lost provenance or bypassed the stage-basis blocker.");
+Check(registered.Where(row => row.ApiType == "BB3").All(row => row.Size == row.SourceSize),
+    "The confirmed BB3 size corrections still disagree with the drawings.");
+foreach (var (code, size, selectable) in new[]
+{
+    ("BB3_LO_SCSK_520-120_472", "520-120", false), ("BB3_LO_SCSK_1000-220_477", "1000-220", false),
+    ("BB3_LO_SCSK_1200-200_478", "1200-200", true)
+})
+{
+    var correctedSizeRow = registered.Single(row => row.CurveNumber == code);
+    Check(correctedSizeRow.Size == size && correctedSizeRow.AvailableForSelection == selectable,
+        "The corrected BB3 row has an incorrect size or review status: " + code);
+}
+var correctedLibrary = JsonSerializer.SerializeToElement(bb2Workbench.Catalog("XDA", correctedRegisterRow.CurveNumber, 1), json);
+Check(correctedLibrary.GetProperty("records")[0].GetProperty("issues").EnumerateArray()
+        .Any(issue => issue.GetString()!.Contains("3-12", StringComparison.Ordinal)),
+    "The confirmed operating stage limits are not visible in the curve library.");
+foreach (var series in new[] { "XMC", "XMD", "XMR" })
+{
+    var list = JsonSerializer.SerializeToElement(bb2Workbench.Catalog(series, "BB4_LO_", 1), json);
+    Check(list.GetProperty("total").GetInt32() == 40 &&
+        list.GetProperty("records")[0].GetProperty("series").GetString() == "XMC / XMD / XMR",
+        "The applicable series filters did not expose the same 40 drawings.");
+}
+var nativeXmr = JsonSerializer.SerializeToElement(bb2Workbench.Catalog("XMR", "BB5_", 1), json);
+Check(nativeXmr.GetProperty("total").GetInt32() > 0, "The native BB5 XMR records were lost.");
+foreach (var record in registered.Where(row => row.AvailableForSelection))
+{
+    var diameter = record.DiametersMm[^1];
+    double[][] Trace(string quantity) => record.Traces.Single(t => t.Quantity == quantity &&
+        t.DiametersMm.SequenceEqual(new[] { diameter })).Segments.Single();
+    var head = Trace("head");
+    var npsh = Trace("npshr");
+    var power = Trace("shaft_power");
+    double min = new[] { head[0][0], npsh[0][0], power[0][0], record.MinimumFlowM3h ?? 0 }.Max();
+    double max = new[] { head[^1][0], npsh[^1][0], power[^1][0] }.Min();
+    var stages = record.StageLimits[0];
+    bool matched = false;
+    for (int i = 1; i < 16 && !matched; i++)
+    {
+        var flow = min + (max - min) * i / 16;
+        var dutyAtDrawing = new HydcalcDuty { Flow = flow, Head = PdfTrimCurves.AtFlow(head, flow)!.Value * stages,
+            FixedRpm = record.Rpm, Density = 1100, Stages = stages };
+        var hits = RegisteredMultistageCatalog.Search(dutyAtDrawing, null, record.ApiType)
+            .Where(hit => hit.HydraulicLabel == record.CurveNumber).ToArray();
+        if (hits.Length == 0) continue;
+        matched = true;
+        Check(hits.Select(hit => hit.Curve.Series).SequenceEqual(record.PumpTypes) && hits.All(hit =>
+            hit.StageLimits == new StageRange(stages, record.StageLimits[1]) && hit.DiameterRatio == 1 &&
+            Math.Abs(hit.Head - dutyAtDrawing.Head) < 1e-7 &&
+            Math.Abs(hit.Npshr - PdfTrimCurves.AtFlow(npsh, flow)!.Value) < 1e-7 &&
+            Math.Abs(hit.PowerKw - stages * 1.1 * PdfTrimCurves.AtFlow(power, flow)!.Value) < 1e-7),
+            "Registered stage or hydraulic data did not reproduce " + record.CurveNumber);
+        if (record.ApiType == "BB4")
+        {
+            var shared = RegisteredMultistageCatalog.Search(dutyAtDrawing, "XMR", "BB5")
+                .Single(hit => hit.HydraulicLabel == record.CurveNumber);
+            var baseline = hits[0];
+            Check(shared.Curve.Series == "XMR" && shared.PdfReference.SharedHydraulicApiType == "BB4" &&
+                shared.OriginalHydraulicLabel == record.OriginalCurveNumber && shared.StageLimits == baseline.StageLimits &&
+                shared.DiameterRatio == baseline.DiameterRatio && shared.Head == baseline.Head &&
+                shared.Npshr == baseline.Npshr && shared.Efficiency == baseline.Efficiency && shared.PowerKw == baseline.PowerKw,
+                "The XMR calculation did not match the BB4 source for " + record.CurveNumber);
+        }
+    }
+    Check(matched, "No in-range test duty matched " + record.CurveNumber);
+}
+const string bb4Code = "BB4_LO_M15-35_GSG_415";
+var registeredDuty = new PumpRequest(22.674876, 102.444, Rpm: 2980, Family: "XMD", ApiType: "BB4", Stages: 3);
+var registeredHit = ((PumpHit[])await Call("pumps/search", registeredDuty)).Single(hit => hit.Curve == bb4Code);
+Check(registeredHit is { Series: "XMD", Diameter: 175, Stages: 3, Rpm: 2980 } &&
+    registeredHit.StageLimits == new StageRange(3, 15) &&
+    bb2Workbench.Search(registeredDuty with { Family = "XMC" }).Any(hit => hit.Curve == bb4Code && hit.Series == "XMC"),
+    "The shared BB4 trace is not available under both model series.");
+foreach (var excluded in new[] { registeredDuty with { Stages = 2, Head = 68.2958 },
+    registeredDuty with { Rpm = 2950 }, registeredDuty with { Head = 95 }, registeredDuty with { Npsha = 0.5 },
+    registeredDuty with { Clearance = "API" } })
+    Check(!bb2Workbench.Search(excluded).Any(hit => hit.Curve == bb4Code), "A BB4 search exceeded the published basis.");
+var registeredPlots = JsonSerializer.SerializeToElement(await Call("pumps/curves",
+    new { duty = registeredDuty, index = registeredHit.Index }), json);
+Check(registeredPlots.GetProperty("plots")[0].GetString()!.Contains("max impeller only") &&
+    registeredPlots.GetProperty("report").GetProperty("mcsfFlow").GetDouble() == 6.5,
+    "The BB4 plot/report omitted the published minimum flow or trim restriction.");
+using (var registeredPdf = (WorkbenchDownload)await Call("pumps/export-pdf",
+    new { duty = registeredDuty, index = registeredHit.Index }, save: true))
+    Check(registeredPdf.Name.Contains("XMDM15-35_GSG") && registeredPdf.Content.Length > 5000,
+        "The registered BB4 curve did not export under its selected alias.");
+var sharedDuty = registeredDuty with { Family = "XMR", ApiType = "BB5" };
+var sharedHit = ((PumpHit[])await Call("pumps/search", sharedDuty)).Single(hit => hit.Curve == bb4Code);
+Check(sharedHit is { Series: "XMR", ApiType: "BB5", SharedHydraulicApiType: "BB4", Suction: "Single" } &&
+    sharedHit.Diameter == registeredHit.Diameter && sharedHit.OriginalCurve == registeredHit.OriginalCurve &&
+    sharedHit.MotorKw == registeredHit.MotorKw,
+    "The XMR workbench result did not preserve the source and classify it under BB5.");
+foreach (var excluded in new[] { sharedDuty with { ApiType = "BB4" }, sharedDuty with { Stages = 2 },
+    sharedDuty with { Rpm = 2950 }, sharedDuty with { Npsha = 0.5 }, sharedDuty with { Head = 95 },
+    sharedDuty with { Clearance = "API" }, sharedDuty with { ViscosityCp = 8 } })
+    Check(!bb2Workbench.Search(excluded).Any(hit => hit.Curve == bb4Code), "XMR accepted a duty outside the shared curve's basis.");
+var sharedPlots = JsonSerializer.SerializeToElement(await Call("pumps/curves",
+    new { duty = sharedDuty, index = sharedHit.Index }), json);
+Check(sharedPlots.GetProperty("plots")[0].GetString()!.Contains("Shared BB4 hydraulics") &&
+    sharedPlots.GetProperty("plots")[1].GetString()!.Contains("Shared hydraulic trace") &&
+    sharedPlots.GetProperty("report").GetProperty("mcsfFlow").GetDouble() == 6.5,
+    "The shared hydraulic basis or published MCSF was omitted from the report.");
+using (var sharedPdf = (WorkbenchDownload)await Call("pumps/export-pdf",
+    new { duty = sharedDuty, index = sharedHit.Index }, save: true))
+    Check(sharedPdf.Name.Contains("XMRM15-35_GSG") && sharedPdf.Content.Length > 5000,
+        "The shared LO curve did not export under the XMR model.");
+
+var sm = SmCatalog.Bundled;
+Check(sm.Records.Length == 57 && sm.Records.Count(record => record.AvailableForSelection) == 9 &&
+    sm.Records.Select(record => record.SourcePage).SequenceEqual(Enumerable.Range(2, 57)) &&
+    sm.Records.All(record => record.CurveNumber == $"SM_{record.Size}_{record.SourcePage+617}"),
+    "The SM page index, trace status or XDC numbering changed.");
+var smRows = JsonSerializer.SerializeToElement(await Call("pumps/catalog?family=XDC&query=SM_"), json);
+Check(smRows.GetProperty("total").GetInt32() == 57 &&
+    smRows.GetProperty("records")[0].GetProperty("originalCurveNumber").GetString() == "D 1600.01.01/1",
+    "The XDC library did not preserve the new and original SM numbers.");
+var smPending = JsonSerializer.SerializeToElement(await Call("pumps/catalog?family=SM&query=SM_152-320_622"), json);
+Check(smPending.GetProperty("total").GetInt32() == 1 &&
+    !smPending.GetProperty("records")[0].GetProperty("availableForSelection").GetBoolean(),
+    "A header-only SM record is not marked for review.");
+foreach (var record in sm.Records.Where(record => record.AvailableForSelection))
+{
+    var impeller = record.Impellers[^1];
+    PumpHit? hit = null;
+    for (int i = 1; i <= 15 && hit == null; i++)
+    {
+        var flow = impeller.Npshr[0][0] + i / 16d * (impeller.Npshr[^1][0] - impeller.Npshr[0][0]);
+        if (PdfTrimCurves.AtFlow(impeller.Head, flow) is not double head ||
+            PdfTrimCurves.AtFlow(impeller.Power, flow) is not double power) continue;
+        hit = bb2Workbench.Search(new PumpRequest(flow, head, Rpm: record.Rpm, Family: "XDC", ApiType: "BB1"))
+            .SingleOrDefault(p => p.Curve == record.CurveNumber);
+        if (hit != null)
+            Check(hit is { Family: "SM", Series: "XDC", ApiType: "BB1", Stages: 1, Suction: "Double" } &&
+                hit.StageLimits == new StageRange(1, 1) && hit.OriginalCurve == record.OriginalCurveNumber &&
+                hit.Rpm == record.Rpm && Math.Abs(hit.Head - head) < 1e-7 && Math.Abs(hit.Power - power) < 1e-7 &&
+                Math.Abs(hit.Npshr - PdfTrimCurves.AtFlow(impeller.Npshr, flow)!.Value) < 1e-7,
+                $"SM {record.CurveNumber} did not reproduce the metric trace.");
+    }
+    Check(hit != null, $"No in-range test duty matched SM {record.CurveNumber}.");
+}
+var smDuty = new PumpRequest(200, 75, Rpm: 2950, Family: "XDC", ApiType: "BB1");
+var smHit = ((PumpHit[])await Call("pumps/search", smDuty)).Single(p => p.Curve == "SM_126-250_619");
+Check(smHit.Diameter is > 240 and < 250 && smHit.Npshr is > 3 and < 8 && smHit.NpshrSource == "interpolated" &&
+    bb2Workbench.Search(smDuty with { Family = "SM", Rpm = 2980 }).Length == 0 &&
+    bb2Workbench.Search(smDuty with { Family = "SM", Stages = 2 }).Length == 0 &&
+    bb2Workbench.Search(smDuty with { Family = "SM", Clearance = "API" }).Length == 0 &&
+    bb2Workbench.Search(smDuty with { Family = "SM", Npsha = 0.5 }).Length == 0,
+    "SM trim, NPSH coverage, stage, speed or unknown-clearance filters are incorrect.");
+var smPlots = JsonSerializer.SerializeToElement(await Call("pumps/curves", new { duty = smDuty, index = smHit.Index }), json);
+Check(smPlots.GetProperty("plots").GetArrayLength() == 3 &&
+    smPlots.GetProperty("plots")[0].GetString()!.Contains(smHit.Curve), "SM plots did not use the new curve number.");
+using (var smPdf = (WorkbenchDownload)await Call("pumps/export-pdf", new { duty = smDuty, index = smHit.Index }, save: true))
+    Check(smPdf.Content.Length > 5000 && smPdf.Name.Contains("XDC126-250"), "The SM curve did not export under XDC.");
 Check(catalogCurves.All(curve => (curve.CurveNumber != curve.Name || curve.Name == "K50551") &&
         curve.OriginalCurveNumber != curve.Name) &&
     catalogCurves.Select(curve => curve.CurveNumber).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 801,
     "A curve is missing a unique new number or its original number.");
 var options = JsonSerializer.SerializeToElement(await Call("pumps/options"), json);
 Check(options.GetProperty("families").EnumerateArray().Select(value => value.GetString()).SequenceEqual(
-    new[] { "A", "APP", "EPP", "HDD", "KBB", "NPP", "OHH", "WPP", "X", "XC", "XDA", "XDB", "XDC", "XMB", "XMC", "XMD", "XMR", "XTT" }),
+    new[] { "A", "APP", "EPP", "MSD", "MSD2", "NPP", "OHH", "WPP", "X", "XC", "XDA", "XDB", "XDC", "XMB", "XMC", "XMD", "XMR", "XTT" }),
     "Selection filters are not using the current pump series.");
 var ahlstarCurve = catalogCurves.Single(curve => curve.Name == "K50551");
+var mbDuty = new PumpRequest(30, 50, Rpm: 1480, Family: "XMB", ApiType: "BB4");
+var mbStandard = (PumpHit[])await Call("pumps/search", mbDuty with { Clearance = "Standard" });
+var mbApi = (PumpHit[])await Call("pumps/search", mbDuty with { Clearance = "API" });
+Check(mbStandard.Length > 0 && mbStandard.All(p => p.Clearance == "Standard") &&
+    mbApi.Length > 0 && mbApi.All(p => p.Clearance == "API") &&
+    mbStandard.Any(p => p.Size == "50-180" && p.OriginalCurve.Contains("4243.11.11/1") &&
+        p.StageLimits == new StageRange(2, 15)) &&
+    mbApi.Any(p => p.Size == "50-180" && p.OriginalCurve.Contains("4243.11.51/01")),
+    "MB 50-180 did not use the linked source hydraulic for the requested clearance.");
+var mbCurve = catalogCurves.Single(c => c.Name == "4243.11.11/1");
+var mbBep = HydcalcSizing.Bep(mbCurve);
+foreach (var (rpm, maximumStages) in new[] { (2950, 15), (3300, 10) })
+{
+    var flow = mbBep.FlowM3h * rpm / mbCurve.Rpm!.Value;
+    var head = mbBep.Head * maximumStages * Math.Pow(rpm / mbCurve.Rpm.Value, 2);
+    var stageDuty = new PumpRequest(flow, head, Rpm: rpm, Family: "XMB", Stages: maximumStages, Clearance: "Standard");
+    Check(bb2Workbench.Search(stageDuty).Any(p => p.Size == "50-180" && p.StageLimits == new StageRange(2, maximumStages) &&
+            p.Stages == maximumStages) &&
+        !bb2Workbench.Search(stageDuty with { Stages = maximumStages + 1 }).Any(p => p.Size == "50-180") &&
+        !bb2Workbench.Search(stageDuty with { Stages = 1 }).Any(p => p.Family == "MB"),
+        $"MB 50-180 did not enforce the stage range at {rpm} rpm.");
+}
+foreach (var invalid in new[] { mbDuty with { Clearance = "Hot" }, mbDuty with { Clearance = "Other" }, mbDuty with { Stages = 0 } })
+{
+    try { await Call("pumps/search", invalid); throw new InvalidOperationException("An unavailable clearance or invalid stage count was accepted."); }
+    catch (ArgumentException e) { Check(e.Message.Contains(invalid.Clearance == "Hot" ? "Hot" : invalid.Clearance == null ? "级数" : "间隙"), "Selection did not explain the invalid filter."); }
+}
+var msdLibrary = JsonSerializer.SerializeToElement(bb2Workbench.Catalog("MSDD", "MD-188.0", 1), json);
+Check(msdLibrary.GetProperty("total").GetInt32() == 1 &&
+    msdLibrary.GetProperty("records")[0].GetProperty("series").GetString() == "MSD2",
+    "The original MSD-DD curve was not retained under MSD2.");
+foreach (var (family, size, series, suction, stages) in new[] {
+    ("MSD", "14x16x26A", "MSD", "Single", 2), ("MSD-D", "10x10x14.5A", "MSD2", "Double", 3) })
+{
+    var source = catalogCurves.Single(c => c.Family == family && c.Size == size);
+    var bep = HydcalcSizing.Bep(source);
+    var selected = new PumpRequest(bep.FlowM3h, bep.Head * stages, Rpm: (int)Math.Round(source.Rpm!.Value),
+        Family: series, ApiType: "BB3", Stages: stages, Clearance: "API");
+    var hit = bb2Workbench.Search(selected).FirstOrDefault(p => p.Size == size && p.Curve == source.CurveNumber);
+    Check(hit != null && hit.ModelSeries == series && hit.Suction == suction &&
+        !bb2Workbench.Search(selected with { Family = series == "MSD" ? "MSD2" : "MSD" }).Any(p => p.Curve == source.CurveNumber),
+        $"The {family} source curve was not isolated under {series}.");
+    if (series == "MSD2")
+    {
+        using var pdf = PumpWorkbench.CreateCurvePdf(new CurvePdfRequest(selected, hit!.Index, null));
+        Check(pdf.Name.Contains("MSD2" + size) && pdf.Content.Length > 5000, "The double-suction PDF did not use MSD2.");
+    }
+}
 Check(ahlstarCurve.Family == "A" && ahlstarCurve.Size == "23-40" && ahlstarCurve.Points.Count == 40 &&
     ahlstarCurve.Issues.Count == 0 && HydcalcCatalog.Bundled.LinkedProperties(ahlstarCurve).Single().Field(0) == "A",
     "The A23-40 curve or hydraulic link is incomplete.");
@@ -145,6 +432,8 @@ var aDuty = new PumpRequest(30, 150, Family: "A");
 foreach (var (family, curve, size, rpm, flow, head) in new[]
 {
     ("APP", "K14130", "53-200", 985, 450d, 35d),
+    ("A", "K18490", "33-100", 1470, 144d, 50d),
+    ("APP", "K13847", "33-100", 1470, 144d, 45d),
     ("EPP", "K15296", "52-350", 1190, 1600d, 30d),
     ("NPP", "K15413", "31-100", 1770, 200d, 20d),
     ("WPP", "K15587", "32-80", 860, 60d, 10d),
@@ -174,6 +463,62 @@ Check(AhlstarCatalog.VerifiedTraces.Count > 750 &&
     AhlstarCatalog.VerifiedTraces.Select(curve => curve.Page).Distinct().Count() == AhlstarCatalog.VerifiedTraces.Count &&
     AhlstarCatalog.VerifiedTraces.All(curve => curve.Impellers.Count(i => i.Npshr.Length > 0) >= 2),
     "The calibrated bulk AHLSTAR traces are missing or have invalid source-page links.");
+var a33 = AhlstarCatalog.VerifiedTraces.Single(curve => curve.CurveNumber == "K18490");
+var app33 = AhlstarCatalog.VerifiedTraces.Single(curve => curve.CurveNumber == "K13847");
+Check(a33.Page == 56 && app33.Page == 1066 &&
+    a33.Impellers.Select(i => i.DiameterMm).SequenceEqual(new double[] { 400, 380, 360, 340, 320 }) &&
+    app33.Impellers.Select(i => i.DiameterMm).SequenceEqual(new double[] { 400, 370, 340, 330 }) &&
+    a33.Impellers.Where(i => i.Npshr.Length > 0).Select(i => i.DiameterMm).SequenceEqual(new double[] { 400, 360, 320 }) &&
+    app33.Impellers.Where(i => i.Npshr.Length > 0 && !i.NpshrAffinitySourceDiameterMm.HasValue)
+        .Select(i => i.DiameterMm).SequenceEqual(new double[] { 400, 370, 340 }),
+    "The reviewed A33-100 and APP33-100 traces lost their published diameter coverage.");
+var a33Duty = new PumpRequest(144, 50, Rpm: 1470, Family: "A");
+var app33Duty = new PumpRequest(144, 45, Rpm: 1470, Family: "APP");
+var a33Hit = ((PumpHit[])await Call("pumps/search", a33Duty)).Single(pump => pump.Curve == "K18490");
+var app33Hit = ((PumpHit[])await Call("pumps/search", app33Duty)).Single(pump => pump.Curve == "K13847");
+Check(a33Hit is { Diameter: > 369.8 and < 370.2, Npshr: > 1.47 and < 1.52, NpshrSource: "interpolated" } &&
+    app33Hit is { Diameter: > 385.8 and < 386.4, Npshr: > 1.63 and < 1.67, NpshrSource: "interpolated" },
+    "The 33-100 rated samples disagree with their source axes or impeller traces.");
+var app330 = app33.Impellers.Single(i => i.DiameterMm == 330);
+var app340 = app33.Impellers.Single(i => i.DiameterMm == 340);
+const double ratio330 = 330d / 340;
+var app330Duty = app33Duty with { Head = PdfTrimCurves.AtFlow(app330.Head, 144)!.Value };
+var app330Hit = ((PumpHit[])await Call("pumps/search", app330Duty)).Single(pump => pump.Curve == "K13847");
+double affinity = Math.Max(PdfTrimCurves.AtFlow(app340.Npshr, 144)!.Value,
+    PdfTrimCurves.AtFlow(app340.Npshr, 144 / ratio330)!.Value * ratio330 * ratio330);
+Check(app330.NpshrAffinitySourceDiameterMm == 340 && app330Hit.Diameter == 330 &&
+    Math.Abs(app330Hit.Npshr - affinity) < .002 && app330Hit.NpshrSource == PdfTrimCurves.AffinityEstimatedNpshr &&
+    Math.Abs(app330Hit.Power - PdfTrimCurves.AtFlow(app330.Power, 144)!.Value) < 1e-7,
+    "APP33-100 330 mm must retain published power and identify its estimated NPSHr.");
+var app330Chart = JsonSerializer.SerializeToElement(await Call("pumps/curves", new { duty = app330Duty, index = app330Hit.Index }), json);
+Check(app330Chart.GetProperty("printPlots")[1].GetString()!.Contains("Affinity estimate"),
+    "The report curve did not warn about estimated NPSHr.");
+using (var app330Pdf = (WorkbenchDownload)await Call("pumps/export-pdf", new { duty = app330Duty, index = app330Hit.Index }, save: true))
+    Check(IsPdf(app330Pdf) && app330Pdf.Name == "Curve_APP33-100_1470RPM_V0.pdf", "The estimated APP trim did not export.");
+
+var sourceShape = new HydcalcCurve();
+int available33100Trims = 0;
+foreach (var (trimDuty33, curve33) in new[] { (a33Duty, a33), (app33Duty, app33) })
+{
+    var catalog33 = AhlstarCatalog.Bundled.Records.Single(row => row.Page == curve33.Page);
+    foreach (double diameter in catalog33.TrimDiametersMm)
+    {
+        var sample = curve33.Sample(sourceShape, trimDuty33.Rpm!.Value, diameter, trimDuty33.Flow);
+        var hits = (PumpHit[])await Call("pumps/search", trimDuty33 with { Head = sample.Head!.Value });
+        string? expectedSource = curve33 == app33 && diameter < 340 ? PdfTrimCurves.AffinityEstimatedNpshr : sample.NpshrSource;
+        Check(hits.Any(pump => pump.Curve == curve33.CurveNumber && Math.Abs(pump.Diameter - diameter) < 1e-6 &&
+            pump.NpshrSource == expectedSource), $"{catalog33.Family} 33-100 {diameter} mm cannot be selected.");
+        available33100Trims++;
+    }
+}
+Check(available33100Trims == 48, "The 33-100 selection check must cover every listed trim.");
+Check(!((PumpHit[])await Call("pumps/search", app330Duty with { Flow = 30, Head = PdfTrimCurves.AtFlow(app330.Head, 30)!.Value }))
+        .Any(pump => pump.Curve == "K13847") &&
+    !((PumpHit[])await Call("pumps/search", app330Duty with { Npsha = 2.4 })).Any(pump => pump.Curve == "K13847") &&
+    !((PumpHit[])await Call("pumps/search", a33Duty with { Npsha = 1.1 })).Any(pump => pump.Curve == "K18490") &&
+    !((PumpHit[])await Call("pumps/search", a33Duty with { Family = "APP" })).Any(pump => pump.Curve == "K18490") &&
+    !((PumpHit[])await Call("pumps/search", app33Duty with { Family = "A" })).Any(pump => pump.Curve == "K13847"),
+    "A 33-100 curve was used outside its verified NPSHr data or under the wrong family.");
 var bulkRows = JsonSerializer.SerializeToElement(await Call("pumps/catalog?family=A&query=K61117"), json);
 Check(bulkRows.GetProperty("records").EnumerateArray().Any(row =>
     row.GetProperty("availableForSelection").GetBoolean() &&
@@ -295,7 +640,7 @@ foreach (var (family, count) in unavailable)
         family + " must not be available for selection.");
 }
 var grouped = JsonSerializer.SerializeToElement(await Call("pumps/catalog?family=XDB"), json);
-Check(grouped.GetProperty("total").GetInt32() == 153, "The XDB series must group all four source families.");
+Check(grouped.GetProperty("total").GetInt32() == 204, "The XDB series must include the 51 HDD/KBB drawings.");
 foreach (var query in new[] { "bb2_1", "BBT_2x4x13-1_B_BBT 01-1", "BBT 01-1" })
 {
     var matches = JsonSerializer.SerializeToElement(await Call("pumps/catalog?query=" + Uri.EscapeDataString(query)), json);
@@ -429,6 +774,110 @@ using (var zip = new ZipArchive(files.Content, ZipArchiveMode.Read))
         .SequenceEqual(new[] { "GA", "PID", "SEC" }), "Missing drawing ZIP folders.");
 using (var xlsx = (WorkbenchDownload)await Call("submissions/file/xlsx", save: true))
     Check(xlsx.Content.Length > 200, "Missing project workbook export.");
+
+string fixture;
+using (var workbook = new XSSFWorkbook())
+using (var stream = new MemoryStream())
+{
+    var sheet = workbook.CreateSheet("Datasheet");
+    void Set(int r, int c, object value)
+    {
+        var cell = (sheet.GetRow(r - 1) ?? sheet.CreateRow(r - 1)).CreateCell(c);
+        if (value is double number) cell.SetCellValue(number);
+        else cell.SetCellValue((string)value);
+    }
+    foreach (var (r, c, header) in new[] { (7, 1, "位号"), (7, 2, "泵型号"), (7, 6, "数量"),
+        (8, 7, "流量 m3/h"), (8, 8, "扬程 m"), (8, 9, "温度 ℃"), (8, 11, "Viscosity mPas"),
+        (8, 12, "density kg/m³"), (8, 13, "pressure MPa A"), (8, 15, "NPSHa/NPSHr"),
+        (10, 9, "正常"), (10, 10, "最高"), (10, 13, "入口压力"), (10, 14, "出口压力"),
+        (10, 15, "a"), (10, 16, "r"), (9, 18, "冲洗方案"), (7, 30, "备注") })
+        Set(r, c, header);
+    Set(4, 0, "用户consumer：Test client");
+    for (int row = 11; row <= 12; row++)
+    {
+        Set(row, 1, "EXCEL-" + row); Set(row, 3, "Process liquid"); Set(row, 4, "Water");
+        Set(row, 6, 2d); Set(row, 7, 35d); Set(row, 8, 55d); Set(row, 9, 50d); Set(row, 10, 60d);
+        Set(row, 11, 1d); Set(row, 12, 1000d); Set(row, 13, .1d); Set(row, 15, 15d);
+        Set(row, 16, 99d); Set(row, 18, "Plan 11"); Set(row, 21, "S-5"); Set(row, 29, "380V; IP55");
+    }
+    Set(11, 22, .75d);
+    var percent = workbook.CreateCellStyle();
+    percent.DataFormat = workbook.CreateDataFormat().GetFormat("0%");
+    sheet.GetRow(10).GetCell(22).CellStyle = percent;
+    Set(13, 0, 3d);
+    sheet.GetRow(12).CreateCell(26).SetCellFormula("1/0");
+    Set(14, 1, "NEEDS-HEAD"); Set(14, 7, 35d);
+    Set(15, 0, "配置说明"); Set(16, 7, 999d);
+    workbook.Write(stream, leaveOpen: true);
+    fixture = Convert.ToBase64String(stream.ToArray());
+    File.WriteAllBytes(Path.Combine(directory, "pump-datasheet-fixture.xlsx"), stream.ToArray());
+}
+var importedRows = (ImportedPumpRow[])await Call("pumps/import-datasheet", new { content = fixture });
+Check(importedRows.Length == 3 && importedRows[0] is { SourceRow: 11, Duty: { Flow: 35, Head: 55, Density: 1000,
+    ViscosityCp: 1, Npsha: 15, Temperature: 50 }, Details: { Tag: "EXCEL-11", Client: "Test client", Quantity: 2 } } &&
+    importedRows[0].Issues.Length == 0 && importedRows[^1].Issues.Any(issue => issue.Contains("扬程")) &&
+    importedRows[0].Details.ProposalNotes.Any(note => note.Contains("380V; IP55")) &&
+    importedRows[0].Details.ProposalNotes.Contains("原表效率（%）：75"), "Fixed datasheet mapping failed.");
+if (Environment.GetEnvironmentVariable("CFL_DATASHEET_TEST_INPUT") is { Length: > 0 } samplePath)
+{
+    var sampleRows = (ImportedPumpRow[])await Call("pumps/import-datasheet",
+        new { content = Convert.ToBase64String(File.ReadAllBytes(samplePath)) });
+    Check(sampleRows.Length == 4 && sampleRows.Select(row => row.Duty.Head).SequenceEqual(new double?[] { 21, 26, 28, 31 }) &&
+        sampleRows.All(row => row is { Duty: { Flow: 2800, Density: 1150, Temperature: 50, ViscosityCp: 2, Npsha: 15 },
+            Details.Quantity: 2, Issues.Length: 0 }) && sampleRows[2].Details.ProposalNotes.Any(note => note.Contains("6000V")),
+        "The filled example did not preserve its hydraulic inputs and motor notes.");
+    foreach (var row in sampleRows)
+    {
+        var candidates = (PumpHit[])await Call("pumps/search", row.Duty);
+        Console.WriteLine($"Example Excel row {row.SourceRow}: {candidates.Length} hydraulic matches; " +
+            $"{candidates.Count(hit => hit.Family is "Z" or "CZ")} in ZTools-supported families.");
+    }
+}
+var batchRows = new List<object>();
+foreach (var row in importedRows.Take(2))
+{
+    var hit = ((PumpHit[])await Call("pumps/search", row.Duty)).First(p => p.Family == "CZ" && p.Size == "50-200");
+    batchRows.Add(new { row.Duty, hit.Index, model, row.Details });
+}
+var importedProject = (OfflineState)await Submit("new-from-batch", new { items = batchRows });
+await Change("project", ("I53", "HG20615"));
+Check(importedProject.Rows.Length == 2 && importedProject.Rows.All(row => row.ReviewPending),
+    "Each imported equipment row must begin unconfirmed.");
+var forms = JsonSerializer.SerializeToElement(await Submit("batch-parameters"), json);
+Check(forms[0].GetProperty("proposalNotes").EnumerateArray().Any(note => note.GetString()!.Contains("Plan 11")),
+    "Proposal references did not reach the ZTools per-item adjustment form.");
+var updates = new List<ParameterChanges>();
+for (int i = 0; i < 2; i++)
+{
+    var r = 21 + i;
+    void Edit(string group, params (string Col, string Value)[] pairs) => updates.Add(new(group, i,
+        pairs.Select(pair => new InputChange("input", pair.Col + r, pair.Value)).ToArray()));
+    Edit("motor", ("S", "YBX3-160M2-2"), ("U", "160M"), ("V", "380V"));
+    Edit("configuration", ("E", "10版"), ("AA", "CZ轻轴"), ("Y", "11"), ("Z", "无"));
+}
+updates.Add(new("review", 0, [new InputChange("CFL-App", "I21", "confirmed")]));
+var edited = (OfflineState)await Submit("save-batch", updates);
+Check(!edited.Rows[0].ReviewPending && edited.Rows[1].ReviewPending, "Review must apply to just one item.");
+try
+{
+    await Submit("calculate");
+    throw new InvalidOperationException("Calculation allowed an unconfirmed equipment row.");
+}
+catch (SubmissionInputException error)
+{
+    Check(error.Issues.Any(issue => issue.Row == 1 && issue.Address == "CFL-App!I22"),
+        "ZTools did not identify the unconfirmed equipment row.");
+}
+await Submit("save-batch", new[] { new ParameterChanges("review", 1, [new InputChange("CFL-App", "I22", "confirmed")]) });
+var readyBatch = (OfflineState)await Submit("calculate");
+Check(!readyBatch.NeedsCalculation && readyBatch.Rows.All(row => !row.ReviewPending), "Confirmed batch did not calculate.");
+var batchDrawings = (OfflineState)await Submit("generate", new { rows = new[] { 0, 1 }, kinds = new[] { "GA", "SEC", "PID" } });
+Check(batchDrawings.Files.Length == 6 && batchDrawings.Files.GroupBy(f => f.Kind).All(kind => kind.Count() == 2),
+    "Two confirmed imported rows did not generate GA, SEC and PID independently.");
+var changed = (OfflineState)await Submit("save", new { group = "configuration", row = 1,
+    changes = new[] { new InputChange("input", "Z22", "") } });
+Check(!changed.Rows[0].ReviewPending && changed.Rows[1].ReviewPending,
+    "An equipment edit must reopen confirmation for that row.");
 Console.WriteLine("Offline pump search, plots, PDFs, project reopening, calculation and drawing exports passed.");
 
 async Task Change(string group, params (string Address, string Value)[] fields) =>

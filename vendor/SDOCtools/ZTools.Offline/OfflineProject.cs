@@ -6,7 +6,7 @@ using ZTools.Engine;
 using ZTools.Standalone;
 namespace ZTools.Offline;
 
-public sealed record EquipmentRow(int Index,string Tag,string Model,string Material,string Template,string List);
+public sealed record EquipmentRow(int Index,string Tag,string Model,string Material,string Template,string List,bool ReviewPending=false);
 public sealed record InputField(string Sheet,string Address,string Label,string Value,string[] Choices,bool ReadOnly=false,bool StrictChoices=false);
 public sealed record ParameterForm(string Title,List<InputField> Fields);
 public sealed record InputChange(string Sheet,string Address,string Value);
@@ -51,6 +51,7 @@ public sealed partial class OfflineProject
                 RequireEditable(input.GetRow(20 + index), 13).SetCellValue(item.Model);
                 WritePumpValues(book, 21 + index, item.Pump);
                 WriteProjectDetails(input, item.Details, item.Temperature, 21 + index);
+                StoreDatasheetReview(book, 20 + index, item.Details?.ProposalNotes);
             }
         });
         workbook = path;
@@ -99,7 +100,7 @@ public sealed partial class OfflineProject
         needsCalculation=true;output=null;return State();
     }
     private static readonly (string Sheet, int Offset, int Start, int End)[] EquipmentRanges =
-        { ("input",21,4,31), ("PID",10,6,9), ("Sec-List",10,6,15), ("Utility",13,5,11), ("CFL-App",21,2,8) };
+        { ("input",21,4,31), ("PID",10,6,9), ("Sec-List",10,6,15), ("Utility",13,5,11), ("CFL-App",21,2,10) };
 
     static bool HasEquipment(WorkbookSession book, int index) =>
         !string.IsNullOrWhiteSpace(book.Cell("input", "N" + (21 + index))) ||
@@ -124,7 +125,7 @@ public sealed partial class OfflineProject
     OfflineState Snapshot(WorkbookSession b)
     {
         var rows=new List<EquipmentRow>();SheetOptions options=new();
-        for(int i=0;i<30;i++)if(HasEquipment(b,i))rows.Add(new(i,b.Cell("input","D"+(21+i)),b.Cell("input","N"+(21+i)),b.Cell("input","O"+(21+i)),b.Cell("Sheet1","CA"+(40+i)),b.Cell("Sheet1","CC"+(40+i))));
+        for(int i=0;i<30;i++)if(HasEquipment(b,i))rows.Add(new(i,b.Cell("input","D"+(21+i)),b.Cell("input","N"+(21+i)),b.Cell("input","O"+(21+i)),b.Cell("Sheet1","CA"+(40+i)),b.Cell("Sheet1","CC"+(40+i)),NeedsDatasheetReview(((ExcelBook)b.Book).Data,20+i)));
         options=ReadOptions(b);
         return new OfflineState(Path.GetFileName(Path.GetDirectoryName(workbook)),needsCalculation,rows.ToArray(),options,Files(),log.ToArray());
     }
@@ -187,6 +188,8 @@ public sealed partial class OfflineProject
                 title = "API 版本、轴承与方案";
                 Edition();
                 Field("input", "AA" + row, "轴承形式");
+                if (NormalizeModel(b.Cell("input", "N" + row)).StartsWith("CZ", StringComparison.Ordinal))
+                    fields[^1] = fields[^1] with { Choices = new[] { "CZ轻轴", "CZ重轴" }, StrictChoices = true };
                 Field("input", "Y" + row, "API 冲洗方案");
                 Field("input", "Z" + row, "冷却方案");
                 fields[^1] = fields[^1] with
@@ -258,20 +261,29 @@ public sealed partial class OfflineProject
     public object BatchParameters()
     {
         using var b = Book();
-        var groups = new[] { "configuration", "motor", "pid", "materials" };
+        var data = ((ExcelBook)b.Book).Data;
+        var groups = new[] { "equipment", "configuration", "motor", "pid", "materials" };
+        ParameterForm BatchForm(string group, int row)
+        {
+            var form = Parameters(group, row, b);
+            return group != "equipment" ? form : form with { Fields = form.Fields
+                .Where(field => new CellReference(field.Address).Col is 3 or 5 or 6 or 7 or 8 or 14 or 27).ToList() };
+        }
         return Enumerable.Range(0, 30).Where(row => HasEquipment(b, row)).Select(row => new
         {
             row,
             tag = b.Cell("input", "D" + (21 + row)),
             model = b.Cell("input", "N" + (21 + row)),
-            forms = groups.ToDictionary(group => group, group => Parameters(group, row, b))
+            review = ReviewStatus(data, 20 + row),
+            proposalNotes = ProposalRow(data, 20 + row)?.GetCell(NotesColumn)?.ToString().Split('\n'),
+            forms = groups.ToDictionary(group => group, group => BatchForm(group, row))
         }).ToArray();
     }
 
     public object SaveBatchParameters(ParameterChanges[] items)
     {
-        if (items == null || items.Length > 120 || items.Any(item => item == null ||
-            item.Group is not ("configuration" or "motor" or "pid" or "materials")))
+        if (items == null || items.Length > 180 || items.Any(item => item == null ||
+            item.Group is not ("equipment" or "configuration" or "motor" or "pid" or "materials" or "review")))
             throw new ArgumentException("无效的批量提交参数。");
         return SaveParameters(items);
     }
@@ -280,10 +292,17 @@ public sealed partial class OfflineProject
     {
         using(var b=Book())
         {
-          foreach (var (group, row, changes) in items)
+          foreach (var (group, row, changes) in items.OrderBy(item => item.Group == "review"))
           {
+            if (group == "review")
+            {
+                ConfirmDatasheetReview(b, row, changes);
+                continue;
+            }
             var allowed=Parameters(group,row,b).Fields.Where(f=>!f.ReadOnly).ToDictionary(f=>f.Sheet+"!"+f.Address);
             if(changes==null||changes.Any(c=>!allowed.ContainsKey(c.Sheet+"!"+c.Address)))throw new ArgumentException("参数不存在或为只读。");
+            if (changes.Length > 0 && group != "project")
+                InvalidateDatasheetReview(((ExcelBook)b.Book).Data, 20 + row);
             foreach(var c in changes)
             {
                 if(c.Value?.TrimStart().StartsWith('=')==true)throw new ArgumentException("请输入参数值，不要输入公式。");

@@ -10,8 +10,21 @@ using ZTools.Offline;
 
 public sealed record PumpRequest(double Flow, double Head, double Density = 1000, int Hz = 50,
     int? Rpm = null, int? Poles = null, double? Npsha = null, double? Temperature = null,
-    string? Family = null, string? ApiType = null, double? ViscosityCp = null, string? XSubtype = null)
+    string? Family = null, string? ApiType = null, double? ViscosityCp = null, string? XSubtype = null,
+    int? Stages = null, string? Clearance = null)
 {
+    internal HydcalcClearance? RequestedClearance()
+    {
+        if (Stages is <= 0) throw new ArgumentException("级数必须为正整数。");
+        if (string.IsNullOrWhiteSpace(Clearance) || string.Equals(Clearance.Trim(), "All", StringComparison.OrdinalIgnoreCase))
+            return null;
+        var value = HydcalcClearances.Read(Clearance) ??
+            throw new ArgumentException("间隙类型必须为 Standard、API 或 Hot。");
+        if (value == HydcalcClearance.Hot && !PumpWorkbench.HasHotClearance)
+            throw new ArgumentException("目录中没有 Hot（热态）间隙曲线，不能按热态条件选型。");
+        return value;
+    }
+
     internal double KinematicViscosity()
     {
         if (ViscosityCp is not double value) return 1;
@@ -25,8 +38,10 @@ public sealed record PumpRequest(double Flow, double Head, double Density = 1000
         return cst;
     }
 }
-public sealed record CurveRequest(PumpRequest Duty, int Index, int Width = 960, double PreferredMin = .7, double PreferredMax = 1.2);
-public sealed record CurvePdfRequest(PumpRequest Duty, int Index, PumpProjectDetails? Details);
+public sealed record PumpRatingOverride(double? Efficiency = null, double? Npshr = null);
+public sealed record CurveRequest(PumpRequest Duty, int Index, int Width = 960, double PreferredMin = .7, double PreferredMax = 1.2,
+    PumpRatingOverride? RatingOverride = null);
+public sealed record CurvePdfRequest(PumpRequest Duty, int Index, PumpProjectDetails? Details, PumpRatingOverride? RatingOverride = null);
 public sealed record PumpTrimSample(double FlowM3h, double? HeadM, double? ShaftPowerKw, double? EfficiencyPercent,
     double? NpshrM, string? NpshrSource);
 public sealed record PumpTrimPoint(double Diameter, double? Head, double? Efficiency, double? Npshr, string? NpshrSource,
@@ -37,7 +52,9 @@ public sealed record PumpHit(int Index, string Family, string Size, string ApiTy
     string FlowType, string Group, string Curve, int Stages, int Rpm, double MinDiameter, double Diameter,
     double MaxDiameter, double Head, double Efficiency, double Npshr, double Power, double? MotorKw,
     string Orientation, string OriginalCurve, string Series, string? XSubtype = null,
-    int? SourceRpm = null, bool InterpolatedTrim = false, string? NpshrSource = null, int? SourcePage = null)
+    int? SourceRpm = null, bool InterpolatedTrim = false, string? NpshrSource = null, int? SourcePage = null,
+    StageRange? StageLimits = null, string? Clearance = null, PumpRatingOverride? RatingOverride = null,
+    string? SharedHydraulicApiType = null)
 {
     public string ModelSeries => XSubtype ?? Series;
 }
@@ -45,11 +62,14 @@ public sealed record PumpHit(int Index, string Family, string Size, string ApiTy
 internal sealed record CurveLibraryEntry(string Id, string Family, string Series, bool AvailableForSelection,
     string Size, string Name, string CurveNumber, string OriginalCurveNumber, double? Rpm,
     double? MinDiameterMm, double? MaxDiameterMm, int Points, IReadOnlyList<string> Issues,
-    AhlstarSourceRecord? Source = null, string? SourceFile = null, double[]? TracedDiametersMm = null);
+    AhlstarSourceRecord? Source = null, string? SourceFile = null, double[]? TracedDiametersMm = null,
+    string? Clearance = null, int? SourcePage = null);
 
 public sealed class PumpWorkbench
 {
     private static readonly string[] XSubtypes = ["XA", "XE", "XF", "XZX", "XGP"];
+    internal static bool HasHotClearance => HydcalcCatalog.Bundled.Curves.Any(curve =>
+        curve.AvailableForSelection && curve.Clearance == HydcalcClearance.Hot);
 
     private static readonly Dictionary<int, double[]> MotorRatings50Hz = new()
     {
@@ -84,15 +104,18 @@ public sealed class PumpWorkbench
             .Where(family => SeriesEnabled(family, catalog.GetSeries(family))).ToArray();
         var verifiedPages = AhlstarCatalog.VerifiedTraces.Select(curve => curve.Page).ToHashSet();
         var ahlstarFamilies = AhlstarCatalog.Bundled.Records.Where(curve => verifiedPages.Contains(curve.Page)).Select(curve => curve.Family);
-        var bb2Families = Bb2Catalog.Records.Where(curve => curve.AvailableForSelection).Select(curve => curve.Family).Distinct();
-        var families = sourceFamilies.Select(catalog.GetSeries).Concat(ahlstarFamilies).Concat(bb2Families)
+        var bb2 = Bb2Catalog.Records.Where(curve => curve.AvailableForSelection);
+        var families = sourceFamilies.Select(family => PumpFamilyPolicy.DisplaySeries(family, catalog.GetSeries(family)))
+            .Concat(ahlstarFamilies).Concat(bb2.Select(curve => curve.Series)).Append(SmCatalog.Series)
+            .Concat(RegisteredMultistageCatalog.Records.Where(curve => curve.AvailableForSelection).SelectMany(curve => curve.ApplicableSeries))
             .Distinct().Order().ToArray();
-        var apiTypes = sourceFamilies.Concat(bb2Families).Select(PumpFamilyPolicy.GetApiTypeLabel)
+        var apiTypes = sourceFamilies.Concat(bb2.Select(curve => curve.Family).Distinct()).Append(SmCatalog.Family)
+            .Select(PumpFamilyPolicy.GetApiTypeLabel)
             .SelectMany(type => type.Split('/', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
             .Where(type => type.Length > 0).Distinct().Order().ToList();
         apiTypes.RemoveAll(type => type is "ISO" or "ANSY" or "\u6d41\u7a0b\u6cf5");
         if (sourceFamilies.Contains("CZ")) apiTypes.Add(PumpFamilyPolicy.GetApiTypeLabel("CZ"));
-        return new { families, apiTypes, xSubtypes = XSubtypes };
+        return new { families, apiTypes, xSubtypes = XSubtypes, hotClearanceAvailable = HasHotClearance };
     }
 
     public object Catalog(string? family, string? query, int page)
@@ -114,25 +137,50 @@ public sealed class PumpWorkbench
                 source, ahlstar.SourceFile, data?.Impellers.Select(i => i.DiameterMm).ToArray() ?? source.PlottedDiametersMm);
         }
         var all = HydcalcCatalog.Bundled.Curves.Select(curve =>
-            new CurveLibraryEntry(curve.Id, curve.Family, curve.AvailableForSelection ? curve.Series : curve.Family,
+            new CurveLibraryEntry(curve.Id, curve.Family,
+                PumpFamilyPolicy.DisplaySeries(curve.Family, curve.AvailableForSelection ? curve.Series : curve.Family, curve),
                 curve.AvailableForSelection, curve.Size, curve.Name, curve.CurveNumber, curve.OriginalCurveNumber,
                 curve.Rpm, curve.Name == "K50551" ? aReference.MinDiameter : curve.MinDiameterMm,
                 curve.MaxDiameterMm, curve.Points.Count, curve.Issues,
                 curve.Name == "K50551" ? aSource : null, curve.Name == "K50551" ? ahlstar.SourceFile : null,
-                curve.Name == "K50551" ? aReference.Impellers.Select(i => i.DiameterMm).ToArray() : null))
+                curve.Name == "K50551" ? aReference.Impellers.Select(i => i.DiameterMm).ToArray() : null,
+                HydcalcClearances.Label(curve.Clearance)))
             .Concat(ahlstar.Records.Where(source => source.Page != aSource.Page).Select(Imported))
             .Concat(Bb2Catalog.Records.Select(source =>
             {
                 var diameters = source.DiametersMm;
-                return new CurveLibraryEntry(source.CurveNumber, source.Family, source.Family, source.AvailableForSelection,
+                return new CurveLibraryEntry(source.PreviousCurveNumber, source.Family, source.Series, source.AvailableForSelection,
                     source.Size, source.WorkbookLabel, source.CurveNumber, source.OriginalCurveNumber,
                     source.Rpm, diameters.Min(), diameters.Max(),
                     source.Traces.Sum(trace => trace.Segments.Sum(segment => segment.Length)),
                     source.SelectionBlockers.Concat(source.Notes).ToArray(),
-                    SourceFile: source.SourceFile, TracedDiametersMm: diameters);
+                    SourceFile: source.SourceFile, TracedDiametersMm: diameters, SourcePage: source.SourcePage);
+            }))
+            .Concat(SmCatalog.Bundled.Records.Select(source =>
+            {
+                var diameters = source.Impellers.Select(impeller => impeller.DiameterMm).ToArray();
+                return new CurveLibraryEntry(source.CurveNumber, SmCatalog.Family, SmCatalog.Series,
+                    source.AvailableForSelection, source.Size, SmCatalog.Family + source.Size, source.CurveNumber,
+                    source.OriginalCurveNumber, source.Rpm, diameters.Length == 0 ? null : diameters[0],
+                    diameters.Length == 0 ? null : diameters[^1], source.Impellers.Sum(impeller => impeller.Head.Length),
+                    source.AvailableForSelection ? ["原型 SM · 扫描图估算"] : ["原型 SM · 仅登记，性能曲线待核验"],
+                    SourceFile: SmCatalog.Bundled.SourceFile, TracedDiametersMm: diameters, SourcePage: source.SourcePage);
+            }))
+            .Concat(RegisteredMultistageCatalog.Records.Select(source =>
+            {
+                var diameters = source.DiametersMm;
+                var series = string.Join(" / ", source.ApplicableSeries);
+                var notes = source.SelectionBlockers.Concat(source.Notes);
+                if (source.ApplicableSeries.Contains("XMR"))
+                    notes = notes.Append("XMR (BB5): shared BB4 hydraulics for preliminary selection.");
+                return new CurveLibraryEntry(source.CurveNumber, source.ApiType == "BB3" ? "SCSK" : series, series,
+                    source.AvailableForSelection, source.Size, source.SourceModel, source.CurveNumber, source.OriginalCurveNumber,
+                    source.Rpm, diameters.Length == 0 ? null : diameters[0], diameters.Length == 0 ? null : diameters[^1],
+                    source.Traces.Sum(trace => trace.Segments.Sum(segment => segment.Length)),
+                    notes.ToArray(), SourceFile: source.SourceFile, TracedDiametersMm: diameters);
             })).ToArray();
         var curves = all.Where(curve =>
-            (MatchesSeries(family, curve.Family, curve.Series) ||
+            (curve.Series.Split(" / ", StringSplitOptions.None).Any(series => MatchesSeries(family, curve.Family, series)) ||
                 (!curve.AvailableForSelection && string.Equals(family?.Trim(), HydcalcCatalog.UnavailableSeries, StringComparison.OrdinalIgnoreCase))) &&
             (Contains(curve.CurveNumber) || Contains(curve.OriginalCurveNumber) || Contains(curve.Name) || Contains(curve.Size) ||
                 (curve.SourceFile is string filename && Contains(filename)) ||
@@ -140,7 +188,7 @@ public sealed class PumpWorkbench
         return new
         {
             total = curves.Length, page, pageSize = 30,
-            families = all.Select(curve => curve.Series).Distinct().Order(),
+            families = all.SelectMany(curve => curve.Series.Split(" / ", StringSplitOptions.None)).Distinct().Order(),
             records = curves.Skip((page - 1) * 30).Take(30)
         };
     }
@@ -155,6 +203,7 @@ public sealed class PumpWorkbench
 
     private static PumpTrimPreview[] BuildTrimPreviews(PumpRequest duty, bool includePlots)
     {
+        var clearance = duty.RequestedClearance();
         if (string.IsNullOrWhiteSpace(duty.Family) || !double.IsFinite(duty.Flow) || duty.Flow <= 0 ||
             !double.IsFinite(duty.Head) || duty.Head <= 0 || duty.KinematicViscosity() > 1)
             return [];
@@ -169,7 +218,8 @@ public sealed class PumpWorkbench
                 continue;
 
             var reference = PdfTrimCurves.For(curve.CurveNumber);
-            if (reference == null) continue;
+            if (reference == null || (duty.Stages is int stages && stages != reference.Stages) ||
+                (clearance != null && curve.Clearance != clearance)) continue;
             var rpm = duty.Rpm ?? (int)Math.Round(curve.Rpm.Value);
             if (rpm != reference.Rpm && Math.Abs(rpm - curve.Rpm.Value) > 1e-6) continue;
             if (!HydcalcSizing.Speeds.Keys.Any(motor =>
@@ -263,11 +313,12 @@ public sealed class PumpWorkbench
         return new("Impeller_Trim_Curves.json", "application/json", new MemoryStream(bytes, writable: false));
     }
 
-    public PumpHit GetSelection(PumpRequest duty, int index)
+    public PumpHit GetSelection(PumpRequest duty, int index, PumpRatingOverride? ratingOverride = null)
     {
         var matches = Find(duty, out var subtype);
         if (index < 0 || index >= matches.Count) throw new ArgumentException("Select a valid pump result.");
-        return Summarize(matches[index], duty.Density, duty.Hz, index, subtype);
+        var selection = matches[index];
+        return ApplyRating(Summarize(selection, duty.Density, duty.Hz, index, subtype), duty, selection, ratingOverride);
     }
 
     public object Curves(CurveRequest request)
@@ -307,13 +358,13 @@ public sealed class PumpWorkbench
 
     internal static WorkbenchDownload CreateCurvePdf(CurvePdfRequest request)
     {
-        var (plots, pump, report) = BuildReport(new(request.Duty, request.Index));
+        var (plots, pump, report) = BuildReport(new(request.Duty, request.Index, RatingOverride: request.RatingOverride));
         string name = ReportFileName.Curve(request.Details?.Tag, request.Details?.Service, pump.ModelSeries + pump.Size, pump.Rpm);
         return new(name + ".pdf", "application/pdf",
             new MemoryStream(PumpCurvePdf.Create(plots, pump, request.Duty, report, request.Details), writable: false));
     }
 
-    private static (PlotModel[] Plots, PumpHit Pump, PumpReportMetrics Report) BuildReport(CurveRequest request)
+    internal static (PlotModel[] Plots, PumpHit Pump, PumpReportMetrics Report) BuildReport(CurveRequest request)
     {
         var results = Find(request.Duty, out var subtype);
         if (request.Index < 0 || request.Index >= results.Count) throw new ArgumentException("Select a valid pump result.");
@@ -322,9 +373,11 @@ public sealed class PumpWorkbench
             throw new ArgumentException("Preferred flow limits are invalid.");
         var pump = results[request.Index];
         var density = request.Duty.Density;
-        var summary = Summarize(pump, density, request.Duty.Hz, request.Index, subtype);
+        var baseline = Summarize(pump, density, request.Duty.Hz, request.Index, subtype);
+        var summary = ApplyRating(baseline, request.Duty, pump, request.RatingOverride);
         var plots = HydcalcSelectionPlotter.Create(pump, density, Efficiency(pump),
             preferredMin: request.PreferredMin, preferredMax: request.PreferredMax, series: summary.ModelSeries);
+        if (summary.RatingOverride != null) AdjustRatingPlots(plots, request.Duty, baseline, summary);
         var flowPlots = pump.ViscosityCst > 1 ? plots : new[] { plots[0] };
         var maximum = flowPlots.SelectMany(plot => plot.Series.OfType<LineSeries>()).SelectMany(series => series.Points)
             .Where(point => double.IsFinite(point.X)).Max(point => point.X);
@@ -349,6 +402,88 @@ public sealed class PumpWorkbench
         return (plots, summary, report);
     }
 
+    private static double ShaftPower(PumpRequest duty, double flow, double head, double efficiency) =>
+        duty.Density * 9.81 * flow / 3600 * head / (efficiency / 100) / 1000;
+
+    private static PumpHit ApplyRating(PumpHit baseline, PumpRequest duty, HydcalcSelection selection, PumpRatingOverride? rating)
+    {
+        if (rating is null or { Efficiency: null, Npshr: null }) return baseline;
+        if (rating.Efficiency is double eta && (!double.IsFinite(eta) || eta <= 0 || eta > 100))
+            throw new ArgumentException("效率须大于 0 且不超过 100%。");
+        if (rating.Npshr is double npshr)
+        {
+            if (!double.IsFinite(npshr) || npshr <= 0 || baseline.Npshr <= 0 || !double.IsFinite(npshr / baseline.Npshr))
+                throw new ArgumentException("NPSHr 须为有效的正数（m）。");
+            if (duty.Npsha is double available && npshr * selection.Options.NpshMargin > available + 1e-9)
+                throw new ArgumentException("修改后的 NPSHr 不满足当前工况的 NPSH 余量要求。");
+        }
+        double efficiency = rating.Efficiency ?? baseline.Efficiency;
+        double power = rating.Efficiency.HasValue ? ShaftPower(duty, duty.Flow, baseline.Head, efficiency) : baseline.Power;
+        if (!double.IsFinite(power) || !double.IsFinite(power * 1.5))
+            throw new ArgumentException("效率过低，无法计算有效的轴功率。");
+        return baseline with
+        {
+            Efficiency = efficiency, Npshr = rating.Npshr ?? baseline.Npshr, Power = power,
+            MotorKw = rating.Efficiency.HasValue ? MotorRating(power, baseline.Rpm, duty.Hz) : baseline.MotorKw,
+            RatingOverride = rating
+        };
+    }
+
+    private static void AdjustRatingPlots(PlotModel[] plots, PumpRequest duty, PumpHit baseline, PumpHit adjusted)
+    {
+        LineSeries Line(int panel, string title) => plots[panel].Series.OfType<LineSeries>().Single(line => line.Title == title);
+        void AdjustLine(LineSeries line, double rated, Func<DataPoint, double> adjust)
+        {
+            for (int i = 0; i < line.Points.Count; i++)
+            {
+                var point = line.Points[i];
+                if (!double.IsFinite(point.X) || !double.IsFinite(point.Y)) continue;
+                double value = Math.Abs(point.X - duty.Flow) < 1e-9 ? rated : adjust(point);
+                if (!double.IsFinite(value) || !double.IsFinite(value * 1.5))
+                    throw new ArgumentException("手动输入超出可绘制的曲线范围。");
+                line.Points[i] = new DataPoint(point.X, value);
+            }
+        }
+        void UpdateDutyMarkerAndAxes(int panel, LineSeries line, double value, double conversion)
+        {
+            var plot = plots[panel];
+            foreach (var marker in plot.Annotations.Where(annotation => Equals(annotation.Tag, "RatedPointTriangle")).ToArray())
+                plot.Annotations.Remove(marker);
+            HydcalcSelectionPlotter.AddDutyMarker(plot, duty.Flow, value);
+            double maximum = line.Points.Where(point => double.IsFinite(point.Y))
+                .Select(point => point.Y).DefaultIfEmpty(value).Max();
+            double scale = Math.Max(maximum, value) * 1.1;
+            if (!double.IsFinite(scale * conversion)) throw new ArgumentException("手动输入超出可绘制的曲线范围。");
+            plot.Axes.Single(axis => axis.Position == AxisPosition.Left).Maximum = scale;
+            plot.Axes.Single(axis => axis.Position == AxisPosition.Right).Maximum = scale * conversion;
+        }
+
+        if (adjusted.RatingOverride!.Efficiency.HasValue)
+        {
+            double factor = adjusted.Efficiency / baseline.Efficiency;
+            var efficiency = Line(0, "Efficiency (%)");
+            var head = plots[0].Series.OfType<LineSeries>().Single(line => line.Title.StartsWith("Rated D=", StringComparison.Ordinal));
+            var power = Line(2, "Shaft power");
+            AdjustLine(efficiency, adjusted.Efficiency, point => Math.Min(100, point.Y * factor));
+            efficiency.Title = "Efficiency (%) (manual)";
+            // Recalculate each flowing point; retain the shutoff power shape where hydraulic power is zero.
+            AdjustLine(power, adjusted.Power, point =>
+                point.X > 0 && PumpReportMetrics.Interpolate(efficiency.Points, point.X) is > 0 and var eta &&
+                PumpReportMetrics.Interpolate(head.Points, point.X) is > 0 and var h
+                    ? ShaftPower(duty, point.X, h, eta)
+                    : point.Y / factor);
+            UpdateDutyMarkerAndAxes(2, power, adjusted.Power, 1.34102209);
+        }
+        if (adjusted.RatingOverride.Npshr.HasValue)
+        {
+            var npsh = Line(1, "NPSHr");
+            double factor = adjusted.Npshr / baseline.Npshr;
+            AdjustLine(npsh, adjusted.Npshr, point => point.Y * factor);
+            plots[1].Subtitle = "Manually adjusted NPSHr; verify with manufacturer";
+            UpdateDutyMarkerAndAxes(1, npsh, adjusted.Npshr, 3.280839895);
+        }
+    }
+
     private static string ExportPlot(PlotModel plot, int width, int height) =>
         new SvgExporter { Width = width, Height = height, IsDocument = false }.ExportToString(plot);
 
@@ -369,12 +504,17 @@ public sealed class PumpWorkbench
     private static double Efficiency(HydcalcSelection item) =>
         item.Property.Field(0) == "Z" ? HydcalcZSelection.RatedEfficiency(item) : item.Efficiency;
 
-    private static string SelectionSeries(HydcalcSelection item) =>
-        item.PdfReference != null ? item.Curve.Series : HydcalcCatalog.Bundled.GetSeries(item.Property.Field(0));
+    private static string SelectionSeries(HydcalcSelection item)
+    {
+        var family = item.Property.Field(0);
+        var series = item.PdfReference != null ? item.Curve.Series : HydcalcCatalog.Bundled.GetSeries(family);
+        return PumpFamilyPolicy.DisplaySeries(family, series, item.SuctionCurve ?? item.Curve);
+    }
 
     private static PumpHit Summarize(HydcalcSelection item, double density, int hz, int index, string? subtype)
     {
         var family = item.Property.Field(0);
+        var series = SelectionSeries(item);
         var efficiency = Efficiency(item);
         var power = item.PdfReference?.UsesPlottedEfficiency == true ? item.PowerKw :
             density * 9.81 * item.Flow / 3600 * item.Head / (efficiency / 100) / 1000;
@@ -384,12 +524,13 @@ public sealed class PumpWorkbench
         if (item.SuctionCurve != null)
             minimum = Math.Max(minimum, item.SuctionCurve.MinDiameterMm!.Value / item.SuctionCurve.MaxDiameterMm!.Value * maximum);
         return new PumpHit(index, family, item.Property.Field(1), PumpFamilyPolicy.GetApiTypeLabel(family),
-            PumpFamilyPolicy.GetSuctionLabel(family), item.FlowType, item.HydraulicGroup,
+            series == "MSD2" ? "Double" : PumpFamilyPolicy.GetSuctionLabel(family), item.FlowType, item.HydraulicGroup,
             item.HydraulicLabel, item.Stages, item.Rpm, minimum, item.DiameterRatio * maximum,
             maximum, item.Head, efficiency, item.Npshr, power, motor,
-            item.Property.Field(9), item.OriginalHydraulicLabel, SelectionSeries(item), subtype,
+            item.Property.Field(9), item.OriginalHydraulicLabel, series, subtype,
             item.PdfReference?.Rpm, item.PdfReference?.IsPublishedDiameter(item.DiameterRatio * maximum) == false,
-            item.NpshrSource, item.PdfReference?.Page);
+            item.NpshrSource, item.PdfReference is { Page: > 0 } reference ? reference.Page : null, item.StageLimits,
+            HydcalcClearances.Label(item.Curve.Clearance), SharedHydraulicApiType: item.PdfReference?.SharedHydraulicApiType);
     }
 
     private static double? MotorRating(double power, int rpm, int hz)
@@ -406,9 +547,15 @@ public sealed class PumpWorkbench
     private static bool SeriesEnabled(string family, string series) => PumpFamilyPolicy.IsEnabled(family) &&
         !string.IsNullOrWhiteSpace(series) && !string.Equals(series, HydcalcCatalog.UnavailableSeries, StringComparison.OrdinalIgnoreCase);
 
-    private static bool MatchesSeries(string? filter, string family, string series) =>
-        string.IsNullOrWhiteSpace(filter) || string.Equals(series, filter.Trim(), StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(family, filter.Trim(), StringComparison.OrdinalIgnoreCase);
+    private static bool MatchesSeries(string? filter, string family, string series)
+    {
+        if (string.IsNullOrWhiteSpace(filter)) return true;
+        var key = filter.Trim().ToUpperInvariant();
+        if (series is "MSD" or "MSD2")
+            return series == (key is "MSDD" or "MSD-D" or "MSD-DD" ? "MSD2" : key);
+        return string.Equals(series, key, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(family, key, StringComparison.OrdinalIgnoreCase);
+    }
 
     private static string? ResolveXSubtype(PumpRequest duty)
     {
@@ -425,16 +572,21 @@ public sealed class PumpWorkbench
         if (duty.Poles is int poles && !HydcalcSizing.Speeds.ContainsKey(Tuple.Create(duty.Hz, poles)))
             throw new ArgumentException("Choose a supported pole count.");
         double viscosity = duty.KinematicViscosity();
+        var clearance = duty.RequestedClearance();
         var input = new HydcalcDuty
         {
             Flow = duty.Flow, Head = duty.Head, Density = duty.Density, Hz = duty.Hz, FixedRpm = duty.Rpm,
-            Poles = duty.Poles, Npsha = duty.Npsha, TemperatureC = duty.Temperature, ViscosityCst = viscosity
+            Poles = duty.Poles, Npsha = duty.Npsha, TemperatureC = duty.Temperature, ViscosityCst = viscosity,
+            Stages = duty.Stages, Clearance = clearance
         };
         var catalog = HydcalcCatalog.Bundled;
         var imported = HydcalcSizing.Search(catalog, input);
-        var zPumps = HydcalcZSelection.Search(duty.Flow, duty.Head, duty.Npsha, duty.Hz, duty.Poles, duty.Rpm, viscosity);
+        var zPumps = HydcalcZSelection.Search(duty.Flow, duty.Head, duty.Npsha, duty.Hz, duty.Poles, duty.Rpm,
+            viscosity, duty.Stages, clearance);
         return zPumps.Concat(imported).Concat(AhlstarCatalog.Bundled.Search(input, duty.Family, duty.ApiType))
-            .Concat(Bb2Catalog.Search(input, duty.Family, duty.ApiType)).Where(item =>
+            .Concat(Bb2Catalog.Search(input, duty.Family, duty.ApiType))
+            .Concat(SmCatalog.Search(input, duty.Family, duty.ApiType))
+            .Concat(RegisteredMultistageCatalog.Search(input, duty.Family, duty.ApiType)).Where(item =>
         {
             var family = item.Property.Field(0);
             var series = SelectionSeries(item);

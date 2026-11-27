@@ -1,4 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../../build/WorkbenchVersion.props" />
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <OutputType>Exe</OutputType>
@@ -7,9 +8,11 @@
     <DefineConstants>$(DefineConstants);CFL_OFFLINE_TEST</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../WorkbenchVersion.cs" />
     <ProjectReference Include="../../vendor/PumpSelectionTools/PumpCore.csproj" />
     <ProjectReference Include="../../vendor/SDOCtools/ZTools.Offline/ZTools.Offline.csproj" />
-    <Compile Include="../../PumpWorkbench.cs;../../PumpCurvePdf.cs;../../PumpReportMetrics.cs;../../SubmissionSession.cs;../../WorkbenchDownload.cs;../Mobile/OfflineRoutes.cs" />
+    <Compile Include="../../PumpWorkbench.cs;../../PumpDatasheet.cs;../../PumpCurvePdf.cs;../../PumpReportMetrics.cs;../../SubmissionSession.cs;../../WorkbenchDownload.cs;../Mobile/OfflineRoutes.cs" />
     <EmbeddedResource Include="../../vendor/SDOCtools/ZTools.Standalone/wwwroot/cfl-logo.jpg" LogicalName="CflWorkbench.Brand.jpg" />
   </ItemGroup>
+  <Import Project="../../build/WorkbenchVersion.targets" />
 </Project>

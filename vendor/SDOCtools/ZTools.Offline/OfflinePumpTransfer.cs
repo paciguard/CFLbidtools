@@ -8,7 +8,7 @@ public sealed record PumpSelectionValues(string Family, string Size, double Flow
     double EfficiencyPercent, int Rpm, int Hz, double? MotorKw);
 
 public sealed record PumpProjectDetails(string Client, string Project, string CustomerOrder, string Company,
-    string Tag, string Service, int? Quantity, string Liquid, string Material, string DrawingModel);
+    string Tag, string Service, int? Quantity, string Liquid, string Material, string DrawingModel, string[] ProposalNotes = null);
 public sealed record ProjectPump(PumpSelectionValues Pump, string Model, PumpProjectDetails Details, double? Temperature);
 
 public sealed partial class OfflineProject
@@ -97,6 +97,7 @@ public sealed partial class OfflineProject
         }
 
         WritePumpValues(((ExcelBook)workbook.Book).Data, rowNumber, pump);
+        InvalidateDatasheetReview(((ExcelBook)workbook.Book).Data, rowNumber - 1);
         workbook.Save();
         needsCalculation = true;
         output = null;

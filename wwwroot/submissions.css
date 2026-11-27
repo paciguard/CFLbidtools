@@ -59,6 +59,8 @@ footer{justify-content:flex-end;border-bottom:0;border-top:1px solid var(--line)
 #busy span{width:21px;height:21px;border:3px solid #fff6;border-top-color:white;border-radius:50%;animation:spin .8s linear infinite;flex:none}
 .completion-dialog{width:min(440px,92vw)}
 #batch-models{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,190px),1fr));gap:8px;margin-top:8px}
+.batch-include{display:flex;align-items:center;gap:8px;margin-top:6px}
+.batch-include input{width:auto}
 #batch-settings{width:min(920px,96vw)}
 #batch-settings-fields{padding:12px;max-height:65dvh;overflow:auto}
 #batch-settings-fields fieldset{border:1px solid var(--line);margin:0 0 10px;min-width:0}

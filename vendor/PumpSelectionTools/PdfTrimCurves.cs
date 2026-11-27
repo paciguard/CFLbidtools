@@ -8,7 +8,13 @@ namespace PumpSelectionTools
 {
     public sealed record PdfTrimCurves(string SourceFile, int Page, string CurveNumber, int Rpm, PdfImpeller[] Impellers)
     {
+        public const string AffinityEstimatedNpshr = "affinity-estimated";
         public int Stages { get; init; } = 1;
+        public int? ReferenceStages { get; init; }
+        public double StageMultiplier => ReferenceStages is int basis ? (double)Stages / basis : 1;
+        public bool MaximumImpellerOnly { get; init; }
+        public string SharedHydraulicApiType { get; init; }
+        public double? MinimumFlowM3h { get; init; }
         public bool UsesPlottedEfficiency { get; init; }
         public double[][] SharedNpshr { get; init; } = Array.Empty<double[]>();
 
@@ -43,11 +49,18 @@ namespace PumpSelectionTools
         public double? DiameterAtDuty(int rpm, double flow, double head)
         {
             double speed = (double)rpm / Rpm;
+            if (MaximumImpellerOnly)
+            {
+                var maximum = Impellers.MaxBy(impeller => impeller.DiameterMm);
+                var available = AtFlow(maximum.Head, flow / speed) * speed * speed * StageMultiplier;
+                // Match a printed head rounded to the application's 0.01 m input resolution.
+                return available is double value && Math.Abs(value - head) <= .005 + 1e-9 ? maximum.DiameterMm : null;
+            }
             var traces = Impellers.OrderBy(impeller => impeller.DiameterMm).ToArray();
             double? previous = null;
             for (int i = 0; i < traces.Length; i++)
             {
-                var current = AtFlow(traces[i].Head, flow / speed) * speed * speed;
+                var current = AtFlow(traces[i].Head, flow / speed) * speed * speed * StageMultiplier;
                 if (current is double exact && Math.Abs(exact - head) < 1e-8) return traces[i].DiameterMm;
                 if (previous is double low && current is double high && low < head && head < high)
                     return traces[i - 1].DiameterMm + (traces[i].DiameterMm - traces[i - 1].DiameterMm) *
@@ -89,9 +102,9 @@ namespace PumpSelectionTools
                 return lower + (value(traces[1]) - lower) *
                     ((diameter - traces[0].DiameterMm) / (traces[1].DiameterMm - traces[0].DiameterMm));
             }
-            var head = Interpolate(hydraulics, trace => AtFlow(trace.Head, referenceFlow)) * speedSquared;
+            var head = Interpolate(hydraulics, trace => AtFlow(trace.Head, referenceFlow)) * speedSquared * StageMultiplier;
             var powerSources = UsesPlottedEfficiency ? Bracket(Impellers.Where(trace => trace.Power.Length > 0), diameter) : hydraulics;
-            var power = Interpolate(powerSources, trace => AtFlow(trace.Power, referenceFlow)) * speedSquared * speed;
+            var power = Interpolate(powerSources, trace => AtFlow(trace.Power, referenceFlow)) * speedSquared * speed * StageMultiplier;
             var efficiency = UsesPlottedEfficiency
                 ? Interpolate(Bracket(Impellers.Where(trace => trace.Efficiency.Length > 0), diameter),
                     trace => AtFlow(trace.Efficiency, referenceFlow))
@@ -113,7 +126,9 @@ namespace PumpSelectionTools
                 usedReference = true;
                 return value * inputSpeed * inputSpeed;
             });
-            string source = npshr == null ? null : npsh.Length == 1 ? (usedReference ? "supplied-reference" : "pdf") :
+            string source = npshr == null ? null :
+                npsh.Any(trace => trace.NpshrAffinitySourceDiameterMm.HasValue) ? AffinityEstimatedNpshr :
+                npsh.Length == 1 ? (usedReference ? "supplied-reference" : "pdf") :
                 (usedReference ? "interpolated-with-reference" : "interpolated");
             return new PdfTrimSample(flow, head, power, efficiency, npshr * speedSquared, source);
         }
@@ -139,6 +154,7 @@ namespace PumpSelectionTools
     public sealed record PdfImpeller(double DiameterMm, double[][] Head, double[][] Power, double[][] Npshr)
     {
         public double[][] Efficiency { get; init; } = Array.Empty<double[]>();
+        public double? NpshrAffinitySourceDiameterMm { get; init; }
     }
     public readonly record struct PdfTrimSample(double Flow, double? Head, double? WaterPower,
         double? Efficiency, double? Npshr, string NpshrSource);

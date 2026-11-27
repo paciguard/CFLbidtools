@@ -1,5 +1,18 @@
 # CFLbidtools
 
+## Version log
+
+Open **版本记录** in the workbench header to see the current application version,
+build number, release notes, and the recent committed changes included at build
+time. The log is bundled with the app and does not need Git or a GitHub connection
+at runtime. Builds without Git history still show the version and release notes.
+
+For a release, update the version and increment the mobile build number in
+`build/WorkbenchVersion.props`, then add a release note to [CHANGELOG.md](CHANGELOG.md).
+Normal builds do not change those numbers. At build time the project records up
+to 60 recent Git commit summaries and short IDs. Commit messages are the automatic
+revision notes; uncommitted edits are not included in that list.
+
 The browser workbench combines Pump Selection Tools with the SDOCtools
 submission module. From the pump selection screen, **提交资料** opens ZTools
 with the current result available for transfer.
@@ -20,6 +33,17 @@ Project workbooks are stored in the host user's local application data under
 `CFL/WebWorkbench`. Set `CFL_DATA_DIR` to use a different directory. Use a
 separate folder for test data. Data is separated by a browser cookie. This local
 preview has no user sign-in and should stay on loopback.
+
+A cached browser window can open even when the selection service is stopped.
+For the Windows installation, start **CFL Engineering Workbench** from the
+Start menu; for a development copy, restart the project at its original address.
+Use **重试连接** to reload the pump catalog without reentering the duty.
+
+The Visual Studio profile uses `https://localhost:65183/` and requires a valid,
+trusted localhost certificate in the current user's Personal store. On a new
+Windows development machine, run `dotnet dev-certs https --trust` before
+starting the profile. The installed Windows workbench uses a different,
+loopback-only HTTP address and does not use this profile.
 
 ## Pump data handoff
 
@@ -84,7 +108,13 @@ The manifest, icons and service worker prepare the workbench for home screen
 installation. A phone needs a reachable HTTPS deployment to use the server.
 The cached page does not perform calculations or generate files offline.
 Use **添加设备项** to queue each pump duty and **批量选型** to find a result per item.
-Open a queued item to review or change its selection. **批量导出曲线** saves the
+Open a queued item, preview a result, then click **确认选型** to save that pump
+and its duty to the item. Previewing another result does not overwrite it.
+Efficiency and NPSHr can be adjusted on a selected result. Use **应用修正**
+to update its curves and report, or **恢复计算值** to restore the catalog
+calculation. Confirm the batch row again to retain the adjustment. The catalog
+and search ranking are unchanged.
+**批量导出曲线** saves the
 selected curves; **批量提交资料** starts a single ZTools project with all mapped
 items. Use **批量图纸参数** to edit motor, bearing, plan, API edition and detail
 inputs, then calculate and generate all checked items. ZTools drawing packages
@@ -102,6 +132,24 @@ The PDF records the viscosity and correction factors. NPSHr is estimated
 using the conservative side-inlet coefficient and needs manufacturer
 verification. The engine does not extrapolate past 3,000 cSt or the method's
 specific-speed or B-factor limits.
+
+## Stages and clearance
+
+Leave the stage count blank to search the applicable HydCalc catalog range.
+An entered count is an exact filter. Limits come from the pump size and
+speed band in `PumpProperties.txt`; fixed-stage PDF curves use the count
+printed on the source sheet. The result and curve report show the applicable range.
+
+Standard and API are clearance variants, independent of the API 610 pump
+classification. The selector uses the matching linked HydCalc curve and
+evaluates its own head, efficiency and NPSHr data. It neither derives API
+curves from Standard curves nor applies a generic trim or power penalty.
+Unspecified clearances are eligible only when no clearance is requested.
+The supplied catalog has no selectable Hot curve.
+
+MSD is the single-suction series. MSD2 groups double-suction MSD variants,
+including the source families MSD-D and MSD-DD, without changing the hydraulic
+data or curve numbers.
 
 ## Curve numbers
 
@@ -121,8 +169,14 @@ hydraulics; the subtype changes the name on selection results, plots
 and curve PDFs. Leaving it unset keeps the generic X name. ZTools
 drawing-model selection works as before.
 
-The BB2 workbook import adds 51 `BB2_LO_*` curves to the library under `HDD`
-and `KBB`, with the source PDF filename, original reference, and review notes.
+X-series selection applies the minimum stable flow at the rated speed and
+trimmed impeller diameter, using the same estimate as the MCSF line on the plot.
+The automatic selector retains a 10% margin over that estimated flow.
+
+The 51 HDD and KBB drawings are grouped under `XDB` in selection and the curve
+library. The edited BB2 register supplies the curve number prefix, with BB2
+serials 267 through 317 appended in register order. Pump sizes, previous curve
+IDs, source PDF filenames, original references, and review notes are retained.
 The 36 selectable curves use the plotted metric traces and published RPM and
 stage count. The selector interpolates at the same flow between available trims,
 without speed conversion or curve extrapolation. It uses plotted efficiency and
@@ -131,9 +185,55 @@ NPSHr trace is provisional for the selected impeller. Curves with incomplete
 traces, paired diameters, conflicting stages, or inconsistent source performance
 remain visible for review, but do not produce selection results.
 
-To regenerate the BB2 data resource, run `scripts/import-bb2-catalog.py` with the
-curve-number workbook, the digitized `BB2_curves.json` export, and
+To regenerate the BB2 resource, run `scripts/import-bb2-catalog.py` with the
+original curve-number workbook and the digitized `BB2_curves.json` export to
+produce a staging catalog. Then run `scripts/renumber-bb2-catalog.py` with the
+edited BB2 register, staging catalog, bundled `CurveNumbers.json`, and
 `vendor/PumpSelectionTools/Resources/Hydcalc/BB2Curves.json` as the output.
+
+### BB3 and BB4 drawing registers
+
+The BB3 SCSK drawings are under XDA; the original MSD and MSD2 series are
+unchanged. Each BB4 LO drawing has one hydraulic record and one curve number.
+XMC and XMD use it under BB4. XMR can also select and rate it under BB5,
+with the result, plots and PDF marked as shared BB4 hydraulics for preliminary
+selection. The native XMR curves are unchanged. Final XMR performance and
+mechanical limits must be confirmed for the actual pump by the manufacturer.
+The numeric suffix continues the existing sequence for
+each API type, in register row order. The library keeps the original drawing
+reference, filename, impeller traces, and any unresolved data issues.
+
+The preliminary selector uses the published RPM and maximum-impeller data
+only. It enforces the marked minimum flow, available trace domains, NPSH margin,
+and allowed stage counts. Head and shaft power scale with the number of
+identical stages; NPSHr does not. BB4 uses the source's 3–15 stage range plus
+any explicitly listed exceptions. Unknown stage basis, conflicting identities,
+or flagged engineering data remain in the library but cannot be selected.
+The source does not provide a validated lower-trim, clearance, or viscosity model.
+
+Build the bundled resource with `scripts/import-bb34-registers.py`, passing
+the directory containing the BB3 and BB4 register/extraction folders, the
+bundled `CurveNumbers.json`, and `BB34Curves.json.gz` as the output.
+
+### SM (XDC / BB1)
+
+The SM scan adds 57 size/speed sheets to the XDC curve library, without replacing
+any SMN curves. New numbers use `SM_<size>_<serial>`, continuing the XDC
+sequence at 619. The printed curve number and page are retained. Nine sheets
+are enabled for preliminary selection; the rest are indexed for further review.
+
+SM is horizontal, single-stage and double-suction. Selection is limited to the
+printed RPM and the available digitized data. The traces use the metric axes
+(m3/h, m, kW) and linear interpolation between published diameters. Efficiency
+is estimated from head and shaft power; NPSHr at intermediate diameters is
+interpolated only where both extreme-diameter traces cover the requested flow.
+The scan does not specify clearance. Verify the rating with the manufacturer
+before final selection.
+
+The scan PDF is not bundled. To regenerate the resource, run
+`scripts/import-sm-curves.py` with the SM PDF, the bundled `CurveNumbers.json`,
+and `vendor/PumpSelectionTools/Resources/Hydcalc/SMCurves.json` as output.
+`--overlay-dir` generates review images showing the sampled curves on each scan.
 
 AHLSTAR A 23-40 uses the digitized K50551 head and shaft-power traces from
 page 21 of `ahlstar_performance_curves.pdf` (2950 rpm) for normal selection
@@ -176,6 +276,20 @@ sections are excluded from the selectable flow domain. The other 975
 image pages remain in the source index, with their first rejection
 reason recorded in the extraction audit.
 
+The two reviewed 1470 rpm Open1 curves in `Ahlstar33-100.json` use separate
+manufacturer sheets: A33-100 K18490 (page 56) and APP33-100 K13847 (page 1066).
+K18490 uses the reviewed head-image digitization and the NPSHr screenshot,
+with shaft power from page 56. K13847 uses the curves and right-hand NPSHr
+scale on page 1066. APP's 330 mm head/power curves are the published values.
+For preliminary selection, the missing 330 mm NPSHr curve uses the 340 mm
+trace scaled with Q proportional to D and NPSHr proportional to D squared,
+with the published 340 mm value at the same flow as a floor. This estimate
+never extends beyond the overlapping flow ranges. Selection and reports
+identify any NPSHr that uses this estimated trace. Verify those values with
+the manufacturer before final selection. The APP sheet's shaft power excludes
+degassing-system power. Run `scripts/import-ahlstar-33-100.py --help` for the
+targeted build.
+
 Run `scripts/import-ahlstar-index.py` and `scripts/import-ahlstar-traces.py`
 with Python and `pypdfium2` to regenerate the embedded source index and
 the individually calibrated traces from the supplied PDF. Run
@@ -186,6 +300,27 @@ and the Windows English OCR language pack. Run it first with the vector
 audit to cache OCR labels, then with `--index` and `--output` to trace
 the curves, and finally with `--candidates` to check the units and
 produce `AhlstarRaster.json.gz`. The scripts support `--help`.
+
+### Import the pump datasheet
+
+Use **导入选型一览表** in the batch selection panel for the fixed CFL supply-list
+template. Keep its headers in rows 7–10 and fill one equipment item per row
+above 配置说明. The workbook remains unchanged. Selectable duties use H (m³/h),
+I (m), J (normal °C), L (mPa·s = cP), M (kg/m³), and P (NPSHa, assumed m;
+check the unit). Missing density uses 1000 kg/m³ and the starting frequency is
+50 Hz, both editable. Q (quoted NPSHr) and the remaining proposal specifications
+are reference notes; they do not replace computed hydraulic results or ZTools
+equipment settings.
+
+Review an imported row in the selection form. Use **更新设备项** to save just
+the inputs for batch selection, or run **开始选型** and click **确认选型** to
+save a specific match. Reviewed Excel messages remain under **原表参数**.
+Run **批量选型** to match the remaining duties, then choose the items and matching models
+for ZTools. In **批量图纸参数**, compare the proposal notes with the actual motor,
+API version, bearing, seal/flush/cooling and material settings. Confirm each
+imported device, then calculate and generate GA, SEC, and PID as a batch. Later
+edits on an imported item reopen its confirmation. The existing ZTools
+catalog limit remains in effect (only supported Z and CZ models).
 
 ## Deployment packages
 

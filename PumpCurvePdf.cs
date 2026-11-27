@@ -3,6 +3,7 @@ using OxyPlot;
 using OxyPlot.Axes;
 using PdfSharp.Drawing;
 using PdfSharp.Pdf;
+using PumpSelectionTools;
 using ZTools.Offline;
 using ZTools.Standalone;
 
@@ -85,6 +86,9 @@ internal static class PumpCurvePdf
             (r.Ns?.ToString("0") ?? "-") + " / " + (r.Nss?.ToString("0") ?? "-") + " US";
         var factors = r.ViscosityFactors is { } values ? string.Join(" / ", values.Select(value => value.ToString("0.000"))) : null;
         var viscosity = d.ViscosityCp is null ? null : F(d.ViscosityCp, "cP") + " / " + F(r.ViscosityCst, "cSt");
+        var stages = p.StageLimits is { } range && range.Minimum != range.Maximum
+            ? FormattableString.Invariant($"{range.Minimum}-{range.Maximum}")
+            : F(p.StageLimits?.Minimum);
         var left = new (string Label, string? Value)[]
         {
             ("Item number", details?.Tag), ("Service", details?.Service), ("Quantity", F(details?.Quantity)),
@@ -95,9 +99,13 @@ internal static class PumpCurvePdf
             ("Site supply frequency", F(d.Hz, "Hz")), ("Performance", null),
             ("Speed criteria", d.Rpm != null ? "Fixed speed" : d.Poles != null ? d.Poles + " poles" : null),
             ("Speed, rated", F(p.Rpm, "rpm")), ("Hydraulic group", p.Group),
+            ("Catalog stage range at rated speed", stages), ("Clearance", p.Clearance),
             ("Impeller diameter, rated", F(p.Diameter, "mm")), ("Impeller diameter, maximum", F(p.MaxDiameter, "mm")),
-            ("Impeller diameter, minimum", F(p.MinDiameter, "mm")), ("Efficiency", F(p.Efficiency, "%")),
-            (p.NpshrSource == "pdf-shared" ? "NPSH required (shared PDF trace)" :
+            ("Impeller diameter, minimum", F(p.MinDiameter, "mm")),
+            (p.RatingOverride?.Efficiency != null ? "Efficiency (manual)" : "Efficiency", F(p.Efficiency, "%")),
+            (p.RatingOverride?.Npshr != null ? "NPSH required (manual)" :
+                p.NpshrSource == PdfTrimCurves.AffinityEstimatedNpshr ? "NPSH required (affinity est.)" :
+                p.NpshrSource == "pdf-shared" ? "NPSH required (shared PDF trace)" :
                 p.SourceRpm.HasValue || r.ViscosityCst is > 1 ? "NPSH required (est.)" : "NPSH required", F(p.Npshr, "m")),
             ("NPSH margin required", null), ("Impeller suction", p.Suction),
             ("Ns / Nss (rated BEP est.)", ns), ("MCSF (curve estimate)", F(r.McsfFlow, "m³/h")),
@@ -108,7 +116,8 @@ internal static class PumpCurvePdf
             ("Diameter ratio, rated / max", F(p.Diameter / p.MaxDiameter * 100, "%")),
             ("Head ratio, rated / max", F(r.HeadRatio, "%")),
             (r.MixedStages && factors != null ? "Cq / Ch / Ce (main) / Cn (inlet)" : "Cq / Ch / Ce / Cn", factors),
-            ("Selection status", p.SourceRpm.HasValue ? "Verify trim and NPSHr" :
+            ("Selection status", p.SharedHydraulicApiType is string shared ? "Shared " + shared + "; verify with vendor" :
+                p.RatingOverride != null ? "Manual rating; verify values" : p.SourceRpm.HasValue ? "Verify trim and NPSHr" :
                 r.ViscosityCst is > 1 ? "HI estimate; verify NPSH" : null), ("Orientation", p.Orientation)
         };
         var right = new (string Label, string? Value)[]

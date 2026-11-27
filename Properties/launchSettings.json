@@ -4,7 +4,11 @@
       "commandName": "Project",
       "launchBrowser": true,
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development"
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "Kestrel__Certificates__Default__Subject": "localhost",
+        "Kestrel__Certificates__Default__Store": "My",
+        "Kestrel__Certificates__Default__Location": "CurrentUser",
+        "Kestrel__Certificates__Default__AllowInvalid": "false"
       },
       "applicationUrl": "https://localhost:65183;http://localhost:65184"
     }

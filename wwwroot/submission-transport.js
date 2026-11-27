@@ -58,14 +58,23 @@ window.CflNative = {
       } else {
         const directory = command === 'generate' ? await requiredProjectFolder() : null;
         const result = await request(command, data);
-        if (result?.rows) await updateProjectFolder(result,
-          ['new-from-pump', 'new-from-batch'].includes(command) ? data : undefined);
+        if (result?.rows) {
+          await updateProjectFolder(result, ['new-from-pump', 'new-from-batch'].includes(command) ? data : undefined);
+          showPendingReviews(result);
+        }
         if (directory) result.folderExport = await saveGeneratedPdfs(directory, result.files);
         window.cflReply({ id, data: result });
       }
     } catch (error) { window.cflReply({ id, error: error.message, issues: error.issues }); }
   }
 };
+
+function showPendingReviews(state) {
+  const count = state?.rows?.filter(row => row.reviewPending).length ?? 0;
+  document.querySelector('#batch-settings-note').textContent = count
+    ? '待逐项确认：' + count + ' 台。' : '';
+}
+window.addEventListener('cfl-project-updated', event => showPendingReviews(event.detail));
 
 async function loadSelection() {
   const version = ++modelRequest;
@@ -95,7 +104,7 @@ async function loadSelection() {
   const status = document.querySelector('#transfer-status');
   status.textContent = '正在匹配 ZTools 型号…';
   try {
-    const matches = await request('pump-models', { duty, index: pump.index });
+    const matches = await request('pump-models', { duty, index: pump.index, ratingOverride: pump.ratingOverride });
     if (version !== modelRequest) return;
     models = matches;
     const options = models.map(model => new Option(model, model));
@@ -131,7 +140,8 @@ createProject.onclick = () => {
   if (!importedSelection || !models.includes(modelSelect.value)) return;
   const { pump, duty, details, folderKey, plannedItems } = importedSelection;
   window.dispatchEvent(new CustomEvent('cfl-new-from-pump', {
-    detail: { duty, index: pump.index, model: modelSelect.value, details, folderKey, plannedItems }
+    detail: { duty, index: pump.index, model: modelSelect.value, details, folderKey, plannedItems,
+      ratingOverride: pump.ratingOverride }
   }));
 };
 transfer.onclick = async () => {
@@ -141,7 +151,7 @@ transfer.onclick = async () => {
   transferring = true;
   updateTransferButton();
   try {
-    const state = await request('apply-pump', { row, duty, index: pump.index });
+    const state = await request('apply-pump', { row, duty, index: pump.index, ratingOverride: pump.ratingOverride });
     await updateProjectFolder(state);
     window.dispatchEvent(new CustomEvent('cfl-project-updated', { detail: state }));
     document.querySelector('#transfer-status').textContent = '已写入当前设备。';

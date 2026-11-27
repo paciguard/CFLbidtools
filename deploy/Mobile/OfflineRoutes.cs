@@ -22,6 +22,8 @@ internal sealed class OfflineRoutes
         {
             switch (route)
             {
+                case "/api/version":
+                    return WorkbenchVersion.Current;
                 case "/api/pumps/options":
                     return pumps.Value.Options();
                 case "/api/pumps/catalog":
@@ -29,6 +31,8 @@ internal sealed class OfflineRoutes
                         int.TryParse(query["page"], out var page) ? Math.Clamp(page, 1, 1000) : 1);
                 case "/api/pumps/search":
                     return pumps.Value.Search(Read<PumpRequest>(body));
+                case "/api/pumps/import-datasheet":
+                    return PumpDatasheet.Import(Read<PumpDatasheetUpload>(body));
                 case "/api/pumps/trim-preview":
                     return pumps.Value.TrimPreview(Read<PumpRequest>(body));
                 case "/api/pumps/curves":

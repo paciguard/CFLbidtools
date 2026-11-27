@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="/workbench.css">
   <script src="/mobile-offline.js" defer></script>
   <script type="module" src="/workbench.js"></script>
+  <script type="module" src="/version-log.js"></script>
 </head>
 <body>
   <header class="masthead">
@@ -24,10 +25,26 @@
       <a href="#submissions" data-view="submissions"><i data-lucide="files"></i> 提交资料</a>
     </nav>
     <div class="masthead-actions">
+      <button class="icon-button" id="open-version-log" type="button" title="版本记录" aria-label="版本记录"><i data-lucide="history"></i></button>
       <button class="icon-button" id="install" type="button" title="安装工作台" aria-label="安装工作台" hidden><i data-lucide="download"></i></button>
       <button id="exit" type="button"><i data-lucide="log-out"></i> 退出</button>
     </div>
   </header>
+  <dialog id="version-log" aria-labelledby="version-log-title">
+    <div class="panel-heading">
+      <h2 id="version-log-title">版本记录</h2>
+      <form method="dialog"><button autofocus>关闭</button></form>
+    </div>
+    <div class="version-log-body">
+      <p id="version-log-status" role="status"></p>
+      <div id="version-log-content" hidden>
+        <h3>更新说明</h3>
+        <div id="version-notes"></div>
+        <h3>源代码修订</h3>
+        <pre id="version-revisions"></pre>
+      </div>
+    </div>
+  </dialog>
   <main id="pumps" class="surface">
     <section class="duty">
       <div class="section-heading"><h1>泵选型</h1><span>运行工况</span>
@@ -63,20 +80,29 @@
         <label>指定转速 <span>rpm</span><input name="rpm" type="number" min="1" max="100000" step="1" placeholder="不限"></label>
         <label>电机极数 <select name="poles"><option value="">不限</option><option>2</option><option>4</option><option>6</option><option>8</option><option>10</option><option>12</option></select></label>
         <label>介质温度 <span>°C</span><input name="temperature" type="number" step="any" placeholder="不限"></label>
-        <label>泵系列 <select name="family"><option value="">全部系列</option></select></label>
+        <label>泵系列 <select name="family" disabled><option value="">全部系列</option></select></label>
         <label id="x-subtype-label" hidden>X 子型号 <select name="xSubtype" disabled><option value="">X（未指定）</option></select></label>
-        <label>API 610 分类 <select name="apiType"><option value="">全部分类</option></select></label>
-        <button class="primary" type="submit"><i data-lucide="search"></i> 开始选型</button>
+        <label>API 610 分类 <select name="apiType" disabled><option value="">全部分类</option></select></label>
+        <label>级数 <input name="stages" type="number" min="1" step="1" placeholder="按目录"></label>
+        <label>间隙类型 <select name="clearance"><option value="">不限</option><option value="Standard">Standard</option><option value="API">API</option><option value="Hot">Hot</option></select></label>
+        <button class="primary" id="search-pumps" type="submit" disabled><i data-lucide="search"></i> 开始选型</button>
       </form>
+      <div class="notice connection-notice" id="pump-connection" hidden>
+        <p id="pump-connection-status" role="status"></p>
+        <button id="retry-pump-options" type="button"><i data-lucide="refresh-cw"></i> 重试连接</button>
+      </div>
     </section>
     <section class="duty batch-panel">
       <div class="panel-heading"><h2>批量泵选型</h2><span id="batch-status" role="status"></span></div>
       <div class="project-folder-controls">
+        <button id="batch-import" type="button"><i data-lucide="file-spreadsheet"></i> 导入选型一览表</button>
+        <input id="batch-file" type="file" accept=".xlsx" hidden>
         <button id="batch-add" type="button">添加设备项</button><button id="batch-new" type="button" hidden>结束编辑</button>
         <button id="batch-search" type="button">批量选型</button>
         <button id="batch-export" type="button">批量导出曲线</button>
         <button id="batch-transfer" type="button">批量提交资料</button>
       </div>
+      <details id="batch-source" hidden><summary>原表参数</summary><ul id="batch-source-values"></ul></details>
       <div class="table-scroll" tabindex="0" aria-label="批量泵选型">
         <table><thead><tr><th>设备</th><th>流量 m³/h</th><th>扬程 m</th><th>选型结果</th><th></th></tr></thead><tbody id="batch-items"></tbody></table>
       </div>
@@ -98,11 +124,18 @@
         <div class="panel-heading detail-heading">
           <div><h2 id="selection-title">性能曲线</h2><p id="selection-subtitle"></p><p id="selection-original" hidden></p></div>
           <div class="tools">
+            <button id="confirm-pump" class="primary" type="button" title="保存到正在编辑的设备项" disabled><i data-lucide="check"></i> <span>确认选型</span></button>
             <button id="export-curve" type="button" disabled><i data-lucide="download"></i> 导出 PDF</button>
             <button class="icon-button" id="print" title="打印 / 保存 PDF" aria-label="打印 / 保存 PDF" disabled><i data-lucide="printer"></i></button>
           </div>
         </div>
+        <p id="curve-export-status" role="status" hidden></p>
         <dl class="metrics" id="metrics" hidden></dl>
+        <form id="rating-form" hidden>
+          <span id="rating-status" role="status"></span>
+          <button id="apply-rating" type="submit"><i data-lucide="check"></i> 应用修正</button>
+          <button id="reset-rating" type="button" disabled><i data-lucide="rotate-ccw"></i> 恢复计算值</button>
+        </form>
         <div id="plots" aria-live="polite"><p class="empty">选择一个泵型查看曲线。</p></div>
         <section id="pump-report" aria-label="Pump selection data sheet"></section>
       </section>

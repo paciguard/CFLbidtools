@@ -1,0 +1,24 @@
+<Project>
+  <PropertyGroup>
+    <_CflRoot>$(MSBuildThisFileDirectory)..</_CflRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="$(_CflRoot)/CHANGELOG.md" LogicalName="CflWorkbench.Changelog" />
+    <AssemblyMetadata Include="CflBuildNumber" Value="$(CflBuildNumber)" />
+  </ItemGroup>
+  <Target Name="EmbedCflRevisions" BeforeTargets="AssignTargetPaths"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <PropertyGroup>
+      <_CflRevisions>$(IntermediateOutputPath)cfl-revisions.txt</_CflRevisions>
+    </PropertyGroup>
+    <MakeDir Directories="$(IntermediateOutputPath)" />
+    <Exec WorkingDirectory="$(_CflRoot)"
+          Command="git log --first-parent --oneline --abbrev=10 --no-color --no-decorate --no-notes --encoding=UTF-8 -n 60 -- . &gt; &quot;$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '$(_CflRevisions)'))&quot; 2&gt;&amp;1"
+          IgnoreExitCode="true">
+      <Output TaskParameter="ExitCode" PropertyName="_CflGitExitCode" />
+    </Exec>
+    <ItemGroup Condition="'$(_CflGitExitCode)' == '0'">
+      <EmbeddedResource Include="$(_CflRevisions)" LogicalName="CflWorkbench.Revisions" />
+    </ItemGroup>
+  </Target>
+</Project>

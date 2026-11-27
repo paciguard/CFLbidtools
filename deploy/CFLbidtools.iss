@@ -4,11 +4,14 @@
 #ifndef PackageDir
 #error PackageDir is required
 #endif
+#ifndef AppReleaseVersion
+#error AppReleaseVersion is required
+#endif
 
 [Setup]
 AppId=CFLbidtools
 AppName=CFL Engineering Workbench
-AppVersion=1.2.14
+AppVersion={#AppReleaseVersion}
 AppPublisher=CFL
 DefaultDirName={localappdata}\Programs\CFLbidtools
 DefaultGroupName=CFL Engineering Workbench

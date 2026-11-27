@@ -74,11 +74,14 @@ app.MapGet("/api/connection", (HttpContext context) =>
     if (openBrowser) context.Response.Headers["X-CFL-Installation"] = "windows";
     return Results.NoContent();
 });
+app.MapGet("/api/version", () => WorkbenchVersion.Current);
 app.MapGet("/api/pumps/options", (PumpWorkbench pumps) => pumps.Options());
 app.MapGet("/api/pumps/catalog", (PumpWorkbench pumps, string? family, string? query, int? page) =>
     pumps.Catalog(family, query, Math.Clamp(page ?? 1, 1, 1000)));
 app.MapPost("/api/pumps/search", (PumpWorkbench pumps, PumpRequest request) =>
     Execute(() => Results.Json(pumps.Search(request))));
+app.MapPost("/api/pumps/import-datasheet", (PumpDatasheetUpload request) =>
+    Execute(() => Results.Json(PumpDatasheet.Import(request))));
 app.MapPost("/api/pumps/trim-preview", (PumpWorkbench pumps, PumpRequest request) =>
     Execute(() => Results.Json(pumps.TrimPreview(request))));
 app.MapPost("/api/pumps/export-trim-data", (PumpRequest request) =>

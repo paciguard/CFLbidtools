@@ -249,6 +249,9 @@ namespace PumpSelectionTools
         public double Hmin;
         public double Clearance;
 
+        internal double MinimumStableFlowAt(int rpm, double diameterRatio = 1) =>
+            MinFlow * (rpm / 1475.0) * diameterRatio;
+
     }
     public static class PumpTableCache
     {
@@ -332,10 +335,10 @@ namespace PumpSelectionTools
         }
 
         public static List<HydcalcSelection> Search(double flow, double head, double? npsha, int hz, int? poles,
-            int? fixedRpm = null, double viscosityCst = 1)
+            int? fixedRpm = null, double viscosityCst = 1, int? stages = null, HydcalcClearance? clearance = null)
         {
             var results = new List<HydcalcSelection>();
-            if (flow <= 0 || head <= 0 || double.IsNaN(flow) || double.IsNaN(head) ||
+            if ((stages.HasValue && stages != 1) || flow <= 0 || head <= 0 || double.IsNaN(flow) || double.IsNaN(head) ||
                 double.IsInfinity(flow) || double.IsInfinity(head) || (hz != 50 && hz != 60) ||
                 (fixedRpm.HasValue && fixedRpm.Value <= 0) ||
                 (npsha.HasValue && (npsha.Value < 0 || double.IsNaN(npsha.Value) || double.IsInfinity(npsha.Value))))
@@ -349,19 +352,20 @@ namespace PumpSelectionTools
             {
                 if (!string.Equals(row.PumpType, "Z", StringComparison.OrdinalIgnoreCase) || row.Rpm <= 0) continue;
                 var curve = MatchCurve(row.PumpSize);
-                if (curve == null) continue;
+                if (curve == null || (clearance != null && curve.Clearance != clearance)) continue;
                 foreach (int pole in CentrifugalSearch.GetAllowedPoles(row).Distinct())
                 {
                     int rpm;
                     if ((poles.HasValue && poles.Value != pole) || !CentrifugalSearch.PoleSpeedMap.TryGetValue((hz, pole), out rpm)) continue;
                     if (fixedRpm.HasValue) rpm = fixedRpm.Value;
                     double speedRatio = (double)rpm / row.Rpm;
-                    if (flow >= 1.2 * row.BepFlow * speedRatio || flow * 1475 / rpm < row.MinFlow * 1.1 * speedRatio) continue;
+                    if (flow >= 1.2 * row.BepFlow * speedRatio) continue;
                     if (!seen.Add(row.PumpSize + "@" + rpm)) continue;
                     double ratio, actualHead, efficiency, npshr;
                     var options = new HydcalcSizingOptions();
                     if (!HydcalcSizing.TryDiameter(curve, null, 1, rpm, flow, head,
                         curve.MinDiameterMm.Value / curve.MaxDiameterMm.Value, out ratio, viscosityCst) ||
+                        flow < 1.1 * row.MinimumStableFlowAt(rpm, ratio) ||
                         !HydcalcSizing.TryEvaluate(curve, null, 1, rpm, ratio, flow, options, out actualHead, out efficiency, out npshr, viscosityCst) ||
                         (viscosityCst > 1 && flow >= 1.2 * row.BepFlow * speedRatio *
                             HydcalcSizing.FlowCorrection(curve, rpm, ratio, viscosityCst)) ||

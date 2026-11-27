@@ -20,7 +20,7 @@ namespace PumpSelectionTools
             { "CD", 2 }, { "CD8", 2 }, { "CZ", 1 }, { "GSG", 1 },
             { "MB", 1 }, { "MC", 1 }, { "MD", 1 }, { "MSD", 1 },
             { "MSD-D", 2 }, { "MSD-DD", 2 }, { "OHH", 1 },
-            { "SMN", 2 }, { "TTMC", 1 }, { "VCR8", 1 }, { "Z", 1 }
+            { "SMN", 2 }, { "SM", 2 }, { "TTMC", 1 }, { "VCR8", 1 }, { "Z", 1 }
         };
 
         private static readonly Dictionary<string, string[]> ApiTypes = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
@@ -32,7 +32,8 @@ namespace PumpSelectionTools
             { "GSG", new[] { "BB5" } },
             { "MB", new[] { "BB4" } }, { "MC", new[] { "BB4" } }, { "MD", new[] { "BB4" } },
             { "MSD", new[] { "BB3" } }, { "MSD-D", new[] { "BB3" } }, { "MSD-DD", new[] { "BB3" } },
-            { "OHH", new[] { "OH2" } }, { "SMN", new[] { "BB1" } },
+            { "SCSK", new[] { "BB3" } },
+            { "OHH", new[] { "OH2" } }, { "SMN", new[] { "BB1" } }, { "SM", new[] { "BB1" } },
             { "TTMC", new[] { "VS6" } }, { "VCR8", new[] { "VS6", "VS1" } },
             { "Z", new[] { "OH1", "OH2" } }
         };
@@ -53,6 +54,13 @@ namespace PumpSelectionTools
         {
             int? eyes = GetSuctionEyes(family);
             return eyes == 1 ? "Single" : eyes == 2 ? "Double" : "-";
+        }
+
+        public static string DisplaySeries(string family, string series, HydcalcCurve firstStage = null)
+        {
+            if (family is "MSD-D" or "MSD-DD" or "MSDD") return "MSD2";
+            if (family == "MSD") return firstStage?.IsDoubleSuction == true ? "MSD2" : "MSD";
+            return series;
         }
 
         public static string GetApiTypeLabel(string family)
@@ -81,6 +89,37 @@ namespace PumpSelectionTools
         public string[] Fields { get; set; }
         public string Raw { get { return string.Join(";", Fields); } }
         public string Field(int index) { return index < Fields.Length ? Fields[index] : ""; }
+        // PumpProperties lists maximum then minimum; different speed bands can differ.
+        public StageRange? StageLimits =>
+            int.TryParse(Field(11), NumberStyles.Integer, CultureInfo.InvariantCulture, out var min) &&
+            int.TryParse(Field(10), NumberStyles.Integer, CultureInfo.InvariantCulture, out var max) &&
+            min >= 1 && max >= min ? new StageRange(min, max) : null;
+    }
+
+    public readonly record struct StageRange(int Minimum, int Maximum)
+    {
+        public bool Contains(int count) => count >= Minimum && count <= Maximum;
+    }
+
+    public enum HydcalcClearance { Standard, Api, Hot }
+
+    public static class HydcalcClearances
+    {
+        public static HydcalcClearance? Read(string value) => value?.Trim().ToUpperInvariant() switch
+        {
+            "STANDARD" or "NORMAL" => HydcalcClearance.Standard,
+            "API" => HydcalcClearance.Api,
+            "HOT" => HydcalcClearance.Hot,
+            _ => null
+        };
+
+        public static string Label(HydcalcClearance? value) => value switch
+        {
+            HydcalcClearance.Api => "API",
+            HydcalcClearance.Standard => "Standard",
+            HydcalcClearance.Hot => "Hot",
+            _ => null
+        };
     }
 
     public sealed class HydcalcPoint
@@ -107,6 +146,8 @@ namespace PumpSelectionTools
         public string Family { get { return Header.Length > 0 ? Header[0] : ""; } }
         public string Size { get { return Header.Length > 1 ? Header[1] : ""; } }
         public string Variant { get { return Header.Length > 2 ? Header[2] : ""; } }
+        public bool IsDoubleSuction => Header.Length > 3 && Header[3].Equals("double", StringComparison.OrdinalIgnoreCase);
+        public HydcalcClearance? Clearance => Header.Length > 5 ? HydcalcClearances.Read(Header[5]) : null;
         public double? Rpm { get { return HeaderNumber(8, 60); } }
         public double? MaxDiameterMm { get { return HeaderNumber(6, 1000); } }
         public double? MinDiameterMm { get { return HeaderNumber(7, 1000); } }

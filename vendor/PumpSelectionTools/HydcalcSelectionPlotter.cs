@@ -148,7 +148,7 @@ namespace PumpSelectionTools
                 PumpTableCache.Load();
                 var row = PumpTableCache.Rows.FirstOrDefault(r => string.Equals(r.PumpType.Trim(), "Z", StringComparison.OrdinalIgnoreCase) &&
                     string.Equals(r.PumpSize.Trim(), selection.Property.Field(1).Trim(), StringComparison.OrdinalIgnoreCase) && r.MinFlow > 0);
-                if (row != null) mcsfBase = row.MinFlow * selection.Rpm / 1475.0;
+                if (row != null) mcsfBase = row.MinimumStableFlowAt(selection.Rpm);
             }
             else
             {
@@ -198,10 +198,17 @@ namespace PumpSelectionTools
             Line(npsh, "NPSHr", OxyColors.Blue, rated, p => p.Npshr);
             Line(power, "Shaft power", OxyColors.Blue, rated, p => p.WaterPower * density / 1000);
             head.Subtitle += $" / digitized at {reference.Rpm} rpm" +
-                (reference.IsPublishedDiameter(diameter) ? "" : " / interpolated trim");
-            npsh.Subtitle = reference.SharedNpshr.Length > 0
+                (reference.MaximumImpellerOnly ? " / max impeller only" :
+                    reference.IsPublishedDiameter(diameter) ? "" : " / interpolated trim");
+            if (reference.SharedHydraulicApiType != null)
+                head.Subtitle += $"\nShared {reference.SharedHydraulicApiType} hydraulics; preliminary";
+            npsh.Subtitle = selection.NpshrSource == PdfTrimCurves.AffinityEstimatedNpshr
+                ? "Affinity estimate; verify with manufacturer"
+                : reference.SharedNpshr.Length > 0
                 ? "Shared PDF trace; verify for selected impeller"
-                : "Estimated; verify with manufacturer";
+                : reference.SharedHydraulicApiType != null ? "Shared hydraulic trace; verify with manufacturer"
+                : reference.MaximumImpellerOnly ? "Published max-impeller trace; verify with manufacturer" :
+                    "Estimated; verify with manufacturer";
             AddConvertedAxis(npsh, 3.280839895, "NPSHr (ft)");
             AddConvertedAxis(power, 1.34102209, "Power (hp)");
 
@@ -226,6 +233,18 @@ namespace PumpSelectionTools
             LabelDiameter(head, hMax, "Max", reference.MaxDiameter);
             LabelDiameter(head, hMin, "Min", reference.MinDiameter);
             LabelDiameter(head, hRated, "Rated", diameter);
+            if (reference.MinimumFlowM3h is double cut)
+            {
+                var bottom = reference.Sample(selection.Curve, selection.Rpm, reference.MinDiameter, cut);
+                var top = reference.Sample(selection.Curve, selection.Rpm, reference.MaxDiameter, cut);
+                if (bottom.Head is double lower && top.Head is double upper)
+                {
+                    var mcsf = new LineSeries { Title = "MCSF", Color = OxyColors.Red, LineStyle = LineStyle.Dash };
+                    mcsf.Points.Add(new DataPoint(cut, lower));
+                    mcsf.Points.Add(new DataPoint(cut, upper));
+                    head.Series.Add(mcsf);
+                }
+            }
             if (bep.Head is double h) AddBepMarker(head, bep.Flow, h);
             AddDutyMarker(head, selection.Flow, selection.Head);
             AddDutyMarker(npsh, selection.Flow, selection.Npshr);
