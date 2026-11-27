@@ -77,6 +77,9 @@ internal sealed class WorkbookSession:IDisposable
                 }
                 if (utility) continue;
 
+                if (OfflineProject.NeedsDatasheetReview(((ExcelBook)Book).Data, row - 1))
+                    issues.Add(new(row - 21, equipment, "", "设备参数确认", "CFL-App!I" + row,
+                        "请在“批量图纸参数”中核对并确认此设备的图纸参数。"));
                 Require("equipment", "D", "设备位号", "请填写设备位号。纯数字位号也可以使用。");
                 Require("equipment", "F", "设备名称", "请填写设备名称或用途。");
                 if (!grades.Contains(Read("O")) || Read("O") == "")
@@ -84,6 +87,9 @@ internal sealed class WorkbookSession:IDisposable
                 if (ApiEdition.Number(Read("E")) == 0)
                     Add("configuration", "E", "API 610 图纸版本", "请选择第 7、8 或 10 版。");
                 Require("configuration", "AA", "轴承形式", "请选择与泵型号匹配的轴承形式。");
+                if (model.StartsWith("CZ", StringComparison.OrdinalIgnoreCase) &&
+                    Read("AA") is not ("" or "CZ轻轴" or "CZ重轴"))
+                    Add("configuration", "AA", "轴承形式", "CZ 系列请选择“CZ轻轴”或“CZ重轴”。");
                 Require("motor", "U", "机座 / GA 底座号", "请选择与电机及泵匹配的底座。");
                 if (!OfflineProject.MotorVoltages.Contains(Read("V")))
                     Add("motor", "V", "电机铭牌电压", "请选择数据库支持的 380V、6000V 或 10000V。");

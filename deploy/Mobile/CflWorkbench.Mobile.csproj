@@ -1,11 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../../build/WorkbenchVersion.props" />
   <PropertyGroup>
     <TargetFramework>net8.0-android</TargetFramework>
     <OutputType>Exe</OutputType>
     <ApplicationTitle>CFL Engineering Workbench</ApplicationTitle>
     <ApplicationId>com.cfl.bidtools</ApplicationId>
-    <ApplicationDisplayVersion>1.2.14</ApplicationDisplayVersion>
-    <ApplicationVersion>17</ApplicationVersion>
+    <ApplicationDisplayVersion>$(CflVersion)</ApplicationDisplayVersion>
+    <ApplicationVersion>$(CflBuildNumber)</ApplicationVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">23.0</SupportedOSPlatformVersion>
@@ -13,10 +14,13 @@
     <AndroidManifest Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">AndroidManifest.xml</AndroidManifest>
     <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
   </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../WorkbenchVersion.cs" Link="Workbench/WorkbenchVersion.cs" />
+  </ItemGroup>
   <ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">
     <ProjectReference Include="../../vendor/PumpSelectionTools/PumpCore.csproj" />
     <ProjectReference Include="../../vendor/SDOCtools/ZTools.Offline/ZTools.Offline.csproj" />
-    <Compile Include="../../PumpWorkbench.cs;../../PumpCurvePdf.cs;../../PumpReportMetrics.cs;../../SubmissionSession.cs;../../WorkbenchDownload.cs"
+    <Compile Include="../../PumpWorkbench.cs;../../PumpDatasheet.cs;../../PumpCurvePdf.cs;../../PumpReportMetrics.cs;../../SubmissionSession.cs;../../WorkbenchDownload.cs"
              Link="Workbench/%(Filename)%(Extension)" />
     <EmbeddedResource Include="../../vendor/SDOCtools/ZTools.Standalone/wwwroot/cfl-logo.jpg" LogicalName="CflWorkbench.Brand.jpg" />
     <AndroidAsset Include="../../wwwroot/**/*" LogicalName="site/%(RecursiveDir)%(Filename)%(Extension)" />
@@ -28,4 +32,5 @@
     <ImageAsset Remove="Assets.xcassets/**/*" />
     <ImageAsset Include="Assets.xcassets/**/*" Exclude="Assets.xcassets/**/.DS_Store" />
   </ItemGroup>
+  <Import Project="../../build/WorkbenchVersion.targets" />
 </Project>

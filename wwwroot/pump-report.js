@@ -55,11 +55,16 @@ export function fillReport(container, pump, duty, report, details) {
     ['Performance', [
       ['Speed criteria', duty.rpm != null ? 'Fixed speed' : duty.poles != null ? duty.poles + ' poles' : null],
       ['Speed, rated', format(pump.rpm, 'rpm')], ['Hydraulic group', pump.group],
+      ['Catalog stage range at rated speed', pump.stageLimits && (pump.stageLimits.minimum === pump.stageLimits.maximum
+        ? pump.stageLimits.minimum : pump.stageLimits.minimum + '–' + pump.stageLimits.maximum)],
+      ['Clearance', pump.clearance],
       ['Impeller diameter, rated', format(pump.diameter, 'mm')],
       ['Impeller diameter, maximum', format(pump.maxDiameter, 'mm')],
       ['Impeller diameter, minimum', format(pump.minDiameter, 'mm')],
-      ['Efficiency', format(pump.efficiency, '%')],
-      [pump.sourceRpm || report.viscosityCst > 1 ? 'NPSH required (est.)' : 'NPSH required', format(pump.npshr, 'm')],
+      [pump.ratingOverride?.efficiency != null ? 'Efficiency (manual)' : 'Efficiency', format(pump.efficiency, '%')],
+      [pump.ratingOverride?.npshr != null ? 'NPSH required (manual)' :
+        pump.npshrSource === 'affinity-estimated' ? 'NPSH required (affinity est.)' :
+        pump.sourceRpm || report.viscosityCst > 1 ? 'NPSH required (est.)' : 'NPSH required', format(pump.npshr, 'm')],
       ['NPSH margin required'], ['Impeller suction', pump.suction],
       ['Ns / Nss (rated BEP est.)', ns === '-' && nss === '-' ? null : ns + ' / ' + nss + ' US'],
       ['MCSF (curve estimate)', format(report.mcsfFlow, 'm³/h')],
@@ -72,7 +77,8 @@ export function fillReport(container, pump, duty, report, details) {
       ['Head ratio, rated / max', format(report.headRatio, '%')],
       [report.mixedStages && report.viscosityFactors ? 'Cq / Ch / Ce (main) / Cn (inlet)' : 'Cq / Ch / Ce / Cn',
         report.viscosityFactors?.map(value => value.toFixed(3)).join(' / ')],
-      ['Selection status', pump.sourceRpm ? 'Verify trim and NPSHr' :
+      ['Selection status', pump.sharedHydraulicApiType ? 'Shared ' + pump.sharedHydraulicApiType + '; verify with vendor' :
+        pump.ratingOverride ? 'Manual rating; verify values' : pump.sourceRpm ? 'Verify trim and NPSHr' :
         report.viscosityCst > 1 ? 'HI estimate; verify NPSH' : null], ['Orientation', pump.orientation]
     ]]
   ]), column([

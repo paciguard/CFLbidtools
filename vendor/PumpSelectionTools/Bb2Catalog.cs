@@ -10,7 +10,8 @@ namespace PumpSelectionTools
 
     public sealed record Bb2Source(string CurveNumber, string Family, string Size, int Rpm, int Stages,
         string SourceFile, int SourcePage, string SourceModel, string OriginalCurveNumber, string WorkbookLabel,
-        string SourceSha256, string[] Notes, string[] SelectionBlockers, Bb2Trace[] Traces)
+        string SourceSha256, string[] Notes, string[] SelectionBlockers, Bb2Trace[] Traces,
+        string Series, string PreviousCurveNumber)
     {
         public bool AvailableForSelection => SelectionBlockers.Length == 0;
         public double[] DiametersMm => Traces.Where(trace => trace.Quantity == "head")
@@ -50,23 +51,22 @@ namespace PumpSelectionTools
             {
                 Stages = row.Stages, SharedNpshr = npsh, UsesPlottedEfficiency = true
             };
-            var property = new HydcalcRecord { Id = row.CurveNumber, Fields = new[] { row.Family, row.Size } };
+            var property = new HydcalcRecord { Id = row.PreviousCurveNumber, Fields = new[] { row.Family, row.Size } };
             var curve = new HydcalcCurve { Id = property.Id, Name = row.CurveNumber, Header = property.Fields,
-                NumberAssignment = new(property.Id, row.OriginalCurveNumber, row.CurveNumber, row.Family) };
+                NumberAssignment = new(property.Id, row.OriginalCurveNumber, row.CurveNumber, row.Series) };
             var head = impellers.SelectMany(impeller => impeller.Head);
             return new(row, property, curve, reference, npsh[0][0], npsh[^1][0], head.Max(point => point[1]));
         }
 
         public static IEnumerable<HydcalcSelection> Search(HydcalcDuty duty, string family, string apiType)
         {
-            if (duty.ViscosityCst > 1 || (!string.IsNullOrWhiteSpace(family) &&
-                !family.Trim().Equals("HDD", StringComparison.OrdinalIgnoreCase) &&
-                !family.Trim().Equals("KBB", StringComparison.OrdinalIgnoreCase)))
-                yield break;
+            if (duty.ViscosityCst > 1) yield break;
+            var filter = family?.Trim();
             foreach (var source in Selectable.Value)
             {
                 var row = source.Row;
-                if ((!string.IsNullOrWhiteSpace(family) && !row.Family.Equals(family.Trim(), StringComparison.OrdinalIgnoreCase)) ||
+                if ((!string.IsNullOrEmpty(filter) && !row.Series.Equals(filter, StringComparison.OrdinalIgnoreCase) &&
+                        !row.Family.Equals(filter, StringComparison.OrdinalIgnoreCase)) ||
                     !PumpFamilyPolicy.MatchesApiType(row.Family, apiType) || duty.Flow < source.MinFlow ||
                     duty.Flow > source.MaxFlow || duty.Head > source.MaxHead ||
                     (duty.FixedRpm is int rpm && rpm != row.Rpm) || !HydcalcSizing.MatchesPublishedSpeed(duty, row.Rpm))

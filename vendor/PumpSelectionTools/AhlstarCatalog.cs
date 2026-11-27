@@ -16,6 +16,7 @@ namespace PumpSelectionTools
         private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
         private static readonly Lazy<AhlstarCatalog> Index = new(() => Load<AhlstarCatalog>("AhlstarIndex.json"));
         private static readonly Lazy<PdfTrimCurves[]> Traces = new(() => Load<PdfTrimCurves[]>("AhlstarTraces.json")
+            .Concat(Load<PdfTrimCurves[]>("Ahlstar33-100.json"))
             .Concat(Load<PdfTrimCurves[]>("AhlstarVector.json.gz"))
             .Concat(Load<PdfTrimCurves[]>("AhlstarRaster.json.gz")).ToArray());
         private static readonly Lazy<SelectionSource[]> Sources = new(BuildSources);

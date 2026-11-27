@@ -14,6 +14,8 @@ namespace PumpSelectionTools
         public int Hz = 50;
         public int? Poles;
         public int? FixedRpm;
+        public int? Stages;
+        public HydcalcClearance? Clearance;
     }
     public sealed class HydcalcSizingOptions
     {
@@ -38,6 +40,8 @@ namespace PumpSelectionTools
         public HydcalcSizingOptions Options { get; internal set; }
         public PdfTrimCurves PdfReference { get; internal set; }
         public string NpshrSource { get; internal set; }
+        public StageRange StageLimits => PdfReference is { ReferenceStages: null } ? new(Stages, Stages) :
+            Property.StageLimits ?? new StageRange(Stages, Stages);
         public (double Flow, double Head, double Efficiency, double Npsh)? ViscosityFactors()
         {
             if (PdfReference != null) return null;
@@ -90,7 +94,7 @@ namespace PumpSelectionTools
             if (!Finite(duty.Flow) || duty.Flow <= 0 || !Finite(duty.Head) || duty.Head <= 0 ||
                 !Finite(duty.Density) || duty.Density <= 0 || !Finite(duty.ViscosityCst) || duty.ViscosityCst <= 0 ||
                 duty.ViscosityCst > 3000 || (duty.Hz != 50 && duty.Hz != 60) ||
-                (duty.FixedRpm.HasValue && duty.FixedRpm.Value <= 0) ||
+                (duty.FixedRpm.HasValue && duty.FixedRpm.Value <= 0) || duty.Stages is <= 0 ||
                 (duty.Npsha.HasValue && (!Finite(duty.Npsha.Value) || duty.Npsha.Value < 0)) ||
                 (duty.TemperatureC.HasValue && !Finite(duty.TemperatureC.Value)))
                 throw new ArgumentException("Invalid operating conditions.");
@@ -113,10 +117,11 @@ namespace PumpSelectionTools
             foreach (var property in catalog.Properties)
             {
                 double maxSpeed, minSpeed;
-                int maxStages, minStages;
                 if (!Number(property.Field(3), out maxSpeed) || !Number(property.Field(4), out minSpeed) ||
-                    !int.TryParse(property.Field(10), out maxStages) || !int.TryParse(property.Field(11), out minStages) ||
-                    minStages < 1 || maxStages < minStages || minSpeed <= 0 || maxSpeed < minSpeed) continue;
+                    property.StageLimits is not StageRange limits ||
+                    (duty.Stages is int requested && !limits.Contains(requested)) ||
+                    minSpeed <= 0 || maxSpeed < minSpeed) continue;
+                int minStages = duty.Stages ?? limits.Minimum, maxStages = duty.Stages ?? limits.Maximum;
                 double limit;
                 if (duty.TemperatureC.HasValue &&
                     ((Number(property.Field(5), out limit) && duty.TemperatureC.Value > limit) ||
@@ -124,7 +129,7 @@ namespace PumpSelectionTools
                 List<HydcalcRecord> links;
                 if (!propertyLinks.TryGetValue(property.Id, out links)) continue;
                 var curves = links.Select(l => { HydcalcCurve c; return eligible.TryGetValue(l.Field(1), out c) ? c : null; })
-                    .Where(c => c != null).Distinct().ToList();
+                    .Where(c => c != null && (duty.Clearance == null || c.Clearance == duty.Clearance)).Distinct().ToList();
                 foreach (int rpm in DutySpeeds(duty, minSpeed, maxSpeed))
                 {
                     if (rpm < minSpeed * 60 - 1e-6 || rpm > maxSpeed * 60 + 1e-6) continue;
@@ -132,7 +137,8 @@ namespace PumpSelectionTools
                     {
                         if (PdfTrimCurves.For(curve.CurveNumber) is PdfTrimCurves reference)
                         {
-                            if (minStages == 1 && FromPdf(property, curve, reference, duty, options, rpm) is HydcalcSelection imported)
+                            if (limits.Contains(reference.Stages) &&
+                                FromPdf(property, curve, reference, duty, options, rpm) is HydcalcSelection imported)
                                 result.Add(imported);
                             continue;
                         }
@@ -172,6 +178,10 @@ namespace PumpSelectionTools
         internal static HydcalcSelection FromPdf(HydcalcRecord property, HydcalcCurve curve, PdfTrimCurves reference,
             HydcalcDuty duty, HydcalcSizingOptions options, int rpm)
         {
+            if ((duty.Stages is int stages && stages != reference.Stages) ||
+                (reference.MinimumFlowM3h is double minimum && duty.Flow < minimum) ||
+                (duty.Clearance != null && curve.Clearance != duty.Clearance))
+                return null;
             // The original catalog entry limits this digitized family to its specified operating speed.
             var diameter = duty.ViscosityCst <= 1 ? reference.DiameterAtDuty(rpm, duty.Flow, duty.Head) : null;
             if (diameter is not double trim) return null;

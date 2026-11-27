@@ -23,6 +23,8 @@ if ($FromRebuild) {
     }
 }
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$version = ([xml](Get-Content -LiteralPath (Join-Path $root 'build/WorkbenchVersion.props') -Raw)).Project.PropertyGroup.CflVersion
+if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Expected a major.minor.patch version in WorkbenchVersion.props.' }
 $packages = Join-Path $root 'artifacts\packages'
 $build = Join-Path $root 'artifacts\package-build'
 $mobile = Join-Path $PSScriptRoot 'Mobile\CflWorkbench.Mobile.csproj'
@@ -38,7 +40,7 @@ if ($Platform -contains 'Windows') {
     $publish = Join-Path $build 'windows-publish'
     Run-Dotnet publish (Join-Path $root 'CflWorkbench.csproj') -c Release -r win-x64 --self-contained true `
         '-p:CflPackageOnRebuild=false' --artifacts-path $build -o $publish --ignore-failed-sources
-    & $InnoCompiler "/DPublishDir=$publish" "/DPackageDir=$packages" (Join-Path $PSScriptRoot 'CFLbidtools.iss')
+    & $InnoCompiler "/DPublishDir=$publish" "/DPackageDir=$packages" "/DAppReleaseVersion=$version" (Join-Path $PSScriptRoot 'CFLbidtools.iss')
     if ($LASTEXITCODE -ne 0) { throw 'Windows setup compilation failed.' }
 }
 if ($Platform -contains 'Android') {

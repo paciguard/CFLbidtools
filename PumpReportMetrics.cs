@@ -33,7 +33,7 @@ internal sealed record PumpReportMetrics(double HydraulicPower, double MotorMarg
         return new(duty.Density * 9.81 * duty.Flow * pump.Head / 3600000, motorMargin,
             power.Points.Where(point => Valid(point) && point.Y > 0).Select(point => (double?)point.Y).Max(),
             Interpolate(rated.Points, 0), bep?.X,
-            mcsf is null ? null : Intersect(rated.Points, mcsf.Points),
+            selection.PdfReference?.MinimumFlowM3h ?? (mcsf is null ? null : Intersect(rated.Points, mcsf.Points)),
             maxHead is > 0 ? 100 * pump.Head / maxHead : null, ns, nss,
             duty.ViscosityCp.HasValue ? selection.ViscosityCst : null,
             factors is { } f ? [f.Flow, f.Head, f.Efficiency, f.Npsh] : null, selection.SuctionCurve != null);
@@ -41,7 +41,7 @@ internal sealed record PumpReportMetrics(double HydraulicPower, double MotorMarg
 
     private static bool Valid(DataPoint p) => double.IsFinite(p.X) && double.IsFinite(p.Y);
 
-    private static double? Interpolate(IList<DataPoint> points, double x)
+    internal static double? Interpolate(IList<DataPoint> points, double x)
     {
         for (var i = 0; i < points.Count; i++)
         {

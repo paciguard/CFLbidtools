@@ -34,7 +34,7 @@ internal sealed class SubmissionSession(string folder, PumpWorkbench pumps)
     {
         if (transfer?.Duty is null || transfer.Index is not int index)
             throw new ArgumentException("请先选择泵型。");
-        var pump = pumps.GetSelection(transfer.Duty, index);
+        var pump = pumps.GetSelection(transfer.Duty, index, transfer.RatingOverride);
         return new PumpSelectionValues(pump.Family, pump.Size, transfer.Duty.Flow,
             transfer.Duty.Head, pump.Npshr, pump.Efficiency, pump.Rpm, transfer.Duty.Hz, pump.MotorKw);
     }
@@ -50,7 +50,7 @@ internal sealed class SubmissionSession(string folder, PumpWorkbench pumps)
             transfer?.Duty?.Temperature);
 
     private sealed record PumpTransfer(int? Row, int? Index, PumpRequest? Duty, string? Model,
-        PumpProjectDetails? Details);
+        PumpProjectDetails? Details, PumpRatingOverride? RatingOverride);
 
 
     public object Import(Stream input) => bridge.Project.Import(input);

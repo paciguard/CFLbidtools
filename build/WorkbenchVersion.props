@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup>
+    <CflVersion>1.2.15</CflVersion>
+    <CflBuildNumber>18</CflBuildNumber>
+    <Version>$(CflVersion)</Version>
+  </PropertyGroup>
+</Project>

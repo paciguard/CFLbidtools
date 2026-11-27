@@ -1,7 +1,7 @@
-const cacheName = 'cfl-workbench-20';
+const cacheName = 'cfl-workbench-30';
 const shell = ['/', '/workbench.css', '/workbench.js', '/lucide.min.js', '/app.webmanifest',
   '/favicon.ico', '/icon-192.png', '/icon-512.png', '/sdoc-assets/cfl-logo.jpg', '/pump-report.js', '/pdf-files.js',
-  '/pump-batch.js', '/mobile-offline.js'];
+  '/pump-batch.js', '/mobile-offline.js', '/version-log.js'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(cacheName).then(cache => cache.addAll(shell)));
